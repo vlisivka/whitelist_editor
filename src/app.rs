@@ -172,28 +172,40 @@ impl eframe::App for WhitelistApp {
                                 .column(Column::initial(100.0))
                                 .column(Column::initial(200.0).at_least(150.0));
 
+                            let header_bg = egui::Color32::from_gray(220);
+                            let header_text = egui::Color32::BLACK;
+                            let style_header = |ui: &mut egui::Ui, text: &str| {
+                                egui::Frame::NONE
+                                    .fill(header_bg)
+                                    .corner_radius(2.0)
+                                    .inner_margin(egui::Margin::symmetric(4, 2))
+                                    .show(ui, |ui| {
+                                        ui.label(egui::RichText::new(text).heading().color(header_text));
+                                    });
+                            };
+
                             table
-                                .header(20.0, |mut header| {
+                                .header(25.0, |mut header| {
                                     header.col(|ui| {
-                                        ui.strong("#");
+                                        style_header(ui, "#");
                                     });
                                     header.col(|ui| {
-                                        ui.strong("Actions");
+                                        style_header(ui, "Actions");
                                     });
                                     header.col(|ui| {
-                                        ui.strong("Blocked");
+                                        style_header(ui, "Blocked");
                                     });
                                     header.col(|ui| {
-                                        ui.strong("Address");
+                                        style_header(ui, "Address");
                                     });
                                     header.col(|ui| {
-                                        ui.strong("MAC Address");
+                                        style_header(ui, "MAC Address");
                                     });
                                     header.col(|ui| {
-                                        ui.strong("Server");
+                                        style_header(ui, "Server");
                                     });
                                     header.col(|ui| {
-                                        ui.strong("Comment");
+                                        style_header(ui, "Comment");
                                     });
                                 })
                                 .body(|body| {
@@ -245,23 +257,34 @@ impl eframe::App for WhitelistApp {
 
                         ui.group(|ui| {
                             ui.vertical(|ui| {
-                                ui.label(egui::RichText::new("🔍 Як дізнатися свою MAC-адресу:").strong().size(16.0));
+                                let section_bg = egui::Color32::from_gray(220);
+                                let section_text = egui::Color32::BLACK;
+
+                                egui::Frame::NONE
+                                    .fill(section_bg)
+                                    .corner_radius(4.0)
+                                    .inner_margin(egui::Margin::symmetric(8, 4))
+                                    .show(ui, |ui| {
+                                        ui.set_min_width(ui.available_width());
+                                        ui.label(egui::RichText::new("🔍 Як дізнатися свою MAC-адресу:").strong().size(16.0).color(section_text));
+                                    });
+                                
                                 ui.add_space(5.0);
 
-                                ui.label(egui::RichText::new("• Android:").strong());
+                                ui.label(egui::RichText::new("• Android:").heading());
                                 ui.label("  Налаштування -> Про телефон -> Статус (або Відомості про обладнання).");
                                 ui.add_space(5.0);
 
-                                ui.label(egui::RichText::new("• iPhone/iPad (iOS):").strong());
+                                ui.label(egui::RichText::new("• iPhone/iPad (iOS):").heading());
                                 ui.label("  Параметри -> Загальні -> Про пристрій -> Адреса Wi-Fi.");
                                 ui.add_space(5.0);
 
-                                ui.label(egui::RichText::new("• Windows:").strong());
+                                ui.label(egui::RichText::new("• Windows:").heading());
                                 ui.label("  Відкрийте Командний рядок (cmd) і введіть `getmac` або `ipconfig /all`.");
                                 ui.label("  Або: Налаштування -> Мережа та Інтернет -> Wi-Fi -> Властивості обладнання.");
                                 ui.add_space(5.0);
 
-                                ui.label(egui::RichText::new("• macOS:").strong());
+                                ui.label(egui::RichText::new("• macOS:").heading());
                                 ui.label("  Системні параметри -> Мережа -> Wi-Fi -> Додатково -> Обладнання.");
                             });
                         });
@@ -270,25 +293,36 @@ impl eframe::App for WhitelistApp {
 
                         ui.group(|ui| {
                             ui.vertical(|ui| {
-                                ui.label(egui::RichText::new("🔒 Як зробити MAC-адресу постійною (вимкнути випадкову адресу):").strong().size(16.0));
+                                let section_bg = egui::Color32::from_gray(220);
+                                let section_text = egui::Color32::BLACK;
+
+                                egui::Frame::NONE
+                                    .fill(section_bg)
+                                    .corner_radius(4.0)
+                                    .inner_margin(egui::Margin::symmetric(8, 4))
+                                    .show(ui, |ui| {
+                                        ui.set_min_width(ui.available_width());
+                                        ui.label(egui::RichText::new("🔒 Як зробити MAC-адресу постійною (вимкнути випадкову адресу):").strong().size(16.0).color(section_text));
+                                    });
+
                                 ui.add_space(5.0);
                                 ui.label("Більшість сучасних пристроїв використовують випадкову MAC-адресу для безпеки. Щоб редактор працював правильно, потрібно встановити постійну адресу для вашої мережі.");
                                 ui.add_space(10.0);
 
-                                ui.label(egui::RichText::new("• Android:").strong());
+                                ui.label(egui::RichText::new("• Android:").heading());
                                 ui.label("  1. Налаштування -> Wi-Fi.");
                                 ui.label("  2. Натисніть на іконку налаштувань (шестерня) біля назви вашої мережі.");
                                 ui.label("  3. Знайдіть пункт 'Тип MAC-адреси'.");
                                 ui.label("  4. Виберіть 'MAC-адреса пристрою' замість 'Рандомізована'.");
                                 ui.add_space(5.0);
 
-                                ui.label(egui::RichText::new("• iPhone/iPad (iOS):").strong());
+                                ui.label(egui::RichText::new("• iPhone/iPad (iOS):").heading());
                                 ui.label("  1. Параметри -> Wi-Fi.");
                                 ui.label("  2. Натисніть кнопку 'i' біля вашої мережі.");
                                 ui.label("  3. Вимкніть перемикач 'Приватна адреса Wi-Fi'.");
                                 ui.add_space(5.0);
 
-                                ui.label(egui::RichText::new("• Windows:").strong());
+                                ui.label(egui::RichText::new("• Windows:").heading());
                                 ui.label("  1. Налаштування -> Мережа та Інтернет -> Wi-Fi.");
                                 ui.label("  2. Виберіть вашу мережу.");
                                 ui.label("  3. Вимкніть 'Випадкові апаратні адреси' (Random Hardware Addresses).");
