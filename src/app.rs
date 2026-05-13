@@ -22,6 +22,8 @@ pub struct WhitelistApp {
 
     // UI state
     editing_lease: Option<Lease>,
+    original_lease: Option<Lease>,
+    deleting_lease: Option<Lease>,
     is_adding: bool,
     selected_tab: Tab,
 }
@@ -36,6 +38,8 @@ impl WhitelistApp {
             leases: Vec::new(),
             status: "Не під'єднано".to_owned(),
             editing_lease: None,
+            original_lease: None,
+            deleting_lease: None,
             is_adding: false,
             selected_tab: Tab::Editor,
         }
@@ -81,11 +85,15 @@ impl WhitelistApp {
                     if lease.block_access { "yes" } else { "no" }
                 )
             } else {
-                // To edit, find by MAC.
-                // MikroTik ROS 7.x set [find mac-address=X] ...
+                let find_query = if let Some(original) = &self.original_lease {
+                    generate_find_query(original)
+                } else {
+                    format!("[find mac-address=\"{}\"]", lease.mac_address)
+                };
+
                 format!(
-                    "/ip/dhcp-server/lease/set [find mac-address=\"{}\"] address={} server={} comment=\"{}\" block-access={}",
-                    lease.mac_address,
+                    "/ip/dhcp-server/lease/set {} address={} server={} comment=\"{}\" block-access={}",
+                    find_query,
                     lease.address.unwrap_or("0.0.0.0".to_owned()),
                     lease.server,
                     lease.comment.unwrap_or_default(),
@@ -104,7 +112,56 @@ impl WhitelistApp {
             }
         }
     }
+
+    fn delete_lease(&mut self, lease: Lease) {
+        if let Some(client) = &mut self.client {
+            let find_query = generate_find_query(&lease);
+            let cmd = format!("/ip/dhcp-server/lease/remove {}", find_query);
+
+            match client.execute(&cmd) {
+                Ok(_) => {
+                    self.status = "Адресу видалено".to_owned();
+                    self.refresh_leases();
+                }
+                Err(e) => {
+                    self.status = format!("Помилка видалення: {}", e);
+                }
+            }
+        }
+    }
+
 }
+
+fn generate_find_query(lease: &Lease) -> String {
+        let mut parts = vec![format!("mac-address=\"{}\"", lease.mac_address)];
+
+        if let Some(addr) = &lease.address {
+            if !addr.is_empty() {
+                parts.push(format!("address=\"{}\"", addr));
+            }
+        }
+
+        parts.push(format!("server=\"{}\"", lease.server));
+
+        if let Some(comment) = &lease.comment {
+            if !comment.is_empty() {
+                parts.push(format!("comment=\"{}\"", comment));
+            }
+        }
+
+        parts.push(format!(
+            "block-access={}",
+            if lease.block_access { "yes" } else { "no" }
+        ));
+
+        if let Some(client_id) = &lease.client_id {
+            if !client_id.is_empty() {
+                parts.push(format!("client-id=\"{}\"", client_id));
+            }
+        }
+
+        format!("[find {}]", parts.join(" "))
+    }
 
 impl eframe::App for WhitelistApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -209,22 +266,28 @@ impl eframe::App for WhitelistApp {
                                 .body(|body| {
                                     body.rows(25.0, self.leases.len(), |mut row| {
                                         let row_index = row.index();
-                                        let lease = &self.leases[row_index];
+                                        let lease = self.leases[row_index].clone();
 
                                         row.col(|ui| {
                                             ui.label(row_index.to_string());
                                         });
                                         row.col(|ui| {
-                                            if ui.button("Редагувати").clicked() {
-                                                self.editing_lease = Some(lease.clone());
-                                                self.is_adding = false;
-                                            }
+                                            ui.horizontal(|ui| {
+                                                if ui.button("⚙").on_hover_text("Редагувати").clicked() {
+                                                    self.editing_lease = Some(lease.clone());
+                                                    self.original_lease = Some(lease.clone());
+                                                    self.is_adding = false;
+                                                }
+                                                if ui.button(egui::RichText::new("❌").color(egui::Color32::from_rgb(200, 50, 50))).on_hover_text("Видалити").clicked() {
+                                                    self.deleting_lease = Some(lease.clone());
+                                                }
+                                            });
                                         });
                                         row.col(|ui| {
                                             if lease.block_access {
-                                                ui.label(egui::RichText::new("  🔒").size(16.0));
+                                                ui.label(egui::RichText::new(" 🔒").size(16.0));
                                             } else {
-                                                ui.label(egui::RichText::new("   ").size(16.0));
+                                                ui.label(egui::RichText::new("  ").size(16.0));
                                             }
                                         });
                                         row.col(|ui| {
@@ -390,6 +453,69 @@ impl eframe::App for WhitelistApp {
 
             if open && !should_close {
                 self.editing_lease = Some(lease);
+            }
+        }
+
+        // Deletion Confirmation Window
+        if let Some(lease) = self.deleting_lease.take() {
+            let mut open = true;
+            let mut should_delete = false;
+            let mut should_close = false;
+
+            egui::Window::new("Підтвердження видалення")
+                .open(&mut open)
+                .resizable(false)
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new("⚠️ Ви впевнені, що хочете видалити цей запис?").heading().color(egui::Color32::RED));
+                        ui.label("Цю дію неможливо буде скасувати.");
+                        ui.add_space(10.0);
+
+                        ui.group(|ui| {
+                            egui::Grid::new("delete_info_grid")
+                                .num_columns(2)
+                                .spacing([20.0, 4.0])
+                                .show(ui, |ui| {
+                                    ui.label("IP-адреса:");
+                                    ui.label(lease.address.as_deref().unwrap_or("-"));
+                                    ui.end_row();
+
+                                    ui.label("MAC-адреса:");
+                                    ui.label(&lease.mac_address);
+                                    ui.end_row();
+
+                                    ui.label("Сервер:");
+                                    ui.label(&lease.server);
+                                    ui.end_row();
+
+                                    ui.label("Коментар:");
+                                    ui.label(lease.comment.as_deref().unwrap_or("-"));
+                                    ui.end_row();
+
+                                    ui.label("Заблоковано:");
+                                    ui.label(if lease.block_access {"так"} else {"ні"});
+                                    ui.end_row();
+                                });
+                        });
+
+                        ui.add_space(15.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Видалити").clicked() {
+                                should_delete = true;
+                                should_close = true;
+                            }
+                            if ui.button("Скасувати").clicked() {
+                                should_close = true;
+                            }
+                        });
+                    });
+                });
+
+            if should_delete {
+                self.delete_lease(lease);
+            } else if open && !should_close {
+                self.deleting_lease = Some(lease);
             }
         }
     }
