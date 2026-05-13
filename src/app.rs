@@ -1,4 +1,4 @@
-use crate::lease_parser::{Lease, parse_leases};
+use crate::mikrotik_data::{DhcpData, Lease, parse_all, find_network_for_server, is_ip_in_range, is_ip_unique, find_first_free_ip};
 use crate::ssh_client::SSHClient;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
@@ -23,7 +23,7 @@ pub struct WhitelistApp {
     #[serde(skip)]
     client: Option<SSHClient>,
     #[serde(skip)]
-    leases: Vec<Lease>,
+    data: DhcpData,
     #[serde(skip)]
     status: String,
 
@@ -36,6 +36,7 @@ pub struct WhitelistApp {
     deleting_lease: Option<Lease>,
     #[serde(skip)]
     is_adding: bool,
+    #[serde(skip)]
     selected_tab: Tab,
 }
 
@@ -46,7 +47,7 @@ impl Default for WhitelistApp {
             user: "admin".to_owned(),
             pass: "".to_owned(),
             client: None,
-            leases: Vec::new(),
+            data: DhcpData::default(),
             status: "Не під'єднано".to_owned(),
             editing_lease: None,
             original_lease: None,
@@ -71,7 +72,7 @@ impl WhitelistApp {
             Ok(client) => {
                 self.status = "З'єднано".to_owned();
                 self.client = Some(client);
-                self.refresh_leases();
+                self.refresh_data();
             }
             Err(e) => {
                 self.status = format!("Помилка під'єднання: {}", e);
@@ -79,15 +80,15 @@ impl WhitelistApp {
         }
     }
 
-    fn refresh_leases(&mut self) {
+    fn refresh_data(&mut self) {
         if let Some(client) = &mut self.client {
-            match client.execute("/ip/dhcp-server/lease/export") {
+            match client.execute("/ip/dhcp-server/export") {
                 Ok(output) => {
-                    self.leases = parse_leases(&output);
-                    self.status = format!("Завантажено {} адрес", self.leases.len());
+                    self.data = parse_all(&output);
+                    self.status = format!("Завантажено {} адрес, {} серверів", self.data.leases.len(), self.data.servers.len());
                 }
                 Err(e) => {
-                    self.status = format!("Помилка при отриманні адрес: {}", e);
+                    self.status = format!("Помилка при отриманні даних: {}", e);
                 }
             }
         }
@@ -124,7 +125,7 @@ impl WhitelistApp {
             match client.execute(&cmd) {
                 Ok(_) => {
                     self.status = "Адреса успішно збережена".to_owned();
-                    self.refresh_leases();
+                    self.refresh_data();
                 }
                 Err(e) => {
                     self.status = format!("Помилка збереження адреси: {}", e);
@@ -141,7 +142,7 @@ impl WhitelistApp {
             match client.execute(&cmd) {
                 Ok(_) => {
                     self.status = "Адресу видалено".to_owned();
-                    self.refresh_leases();
+                    self.refresh_data();
                 }
                 Err(e) => {
                     self.status = format!("Помилка видалення: {}", e);
@@ -225,10 +226,18 @@ impl eframe::App for WhitelistApp {
                         ui.label(format!("Статус: {}", self.status));
                         if self.client.is_some() {
                             if ui.button("Оновити").clicked() {
-                                self.refresh_leases();
+                                self.refresh_data();
                             }
                             if ui.button("Додати адресу").clicked() {
-                                self.editing_lease = Some(Lease::default());
+                                let mut lease = Lease::default();
+                                // If we have servers, pick the first one and suggest IP
+                                if let Some(first_server) = self.data.servers.first() {
+                                    lease.server = first_server.name.clone();
+                                    if let Some(net) = find_network_for_server(first_server, &self.data.networks) {
+                                        lease.address = find_first_free_ip(net, &self.data.leases);
+                                    }
+                                }
+                                self.editing_lease = Some(lease);
                                 self.is_adding = true;
                             }
                         }
@@ -237,7 +246,7 @@ impl eframe::App for WhitelistApp {
                     ui.add_space(10.0);
 
                     // Table View
-                    if !self.leases.is_empty() {
+                    if !self.data.leases.is_empty() {
                         egui::ScrollArea::horizontal().show(ui, |ui| {
                             let table = TableBuilder::new(ui)
                                 .striped(true)
@@ -288,9 +297,9 @@ impl eframe::App for WhitelistApp {
                                     });
                                 })
                                 .body(|body| {
-                                    body.rows(25.0, self.leases.len(), |mut row| {
+                                    body.rows(25.0, self.data.leases.len(), |mut row| {
                                         let row_index = row.index();
-                                        let lease = self.leases[row_index].clone();
+                                        let lease = self.data.leases[row_index].clone();
 
                                         row.col(|ui| {
                                             ui.label(row_index.to_string());
@@ -435,13 +444,37 @@ impl eframe::App for WhitelistApp {
                     .spacing([40.0, 4.0])
                     .show(ui, |ui| {
                         ui.label("IP-адреса:");
-                        let mut address = lease.address.clone().unwrap_or_default();
-                        ui.text_edit_singleline(&mut address);
-                        lease.address = if address.is_empty() {
-                            None
-                        } else {
-                            Some(address)
-                        };
+                        ui.vertical(|ui| {
+                            let mut address = lease.address.clone().unwrap_or_default();
+                            let _response = ui.text_edit_singleline(&mut address);
+                            lease.address = if address.is_empty() {
+                                None
+                            } else {
+                                Some(address.clone())
+                            };
+
+                            // Validation
+                            if !address.is_empty() {
+                                let mut valid = true;
+                                if !is_ip_unique(&address, &self.data.leases, &lease.mac_address) {
+                                    ui.label(egui::RichText::new("⚠️ Ця адреса вже використовується").color(egui::Color32::KHAKI).size(10.0));
+                                    valid = false;
+                                }
+
+                                if let Some(server_info) = self.data.servers.iter().find(|s| s.name == lease.server) {
+                                    if let Some(net) = find_network_for_server(server_info, &self.data.networks) {
+                                        if !is_ip_in_range(&address, net) {
+                                            ui.label(egui::RichText::new(format!("❌ Поза діапазоном {}", net.address)).color(egui::Color32::LIGHT_RED).size(10.0));
+                                            valid = false;
+                                        }
+                                    }
+                                }
+
+                                if !valid {
+                                    // Visual indication on the text edit (not directly supported by egui without custom painter, but label is good)
+                                }
+                            }
+                        });
                         ui.end_row();
 
                         ui.label("MAC-адреса:");
@@ -449,7 +482,25 @@ impl eframe::App for WhitelistApp {
                         ui.end_row();
 
                         ui.label("Сервер:");
-                        ui.text_edit_singleline(&mut lease.server);
+                        let old_server = lease.server.clone();
+                        egui::ComboBox::from_id_salt("server_combo")
+                            .selected_text(&lease.server)
+                            .show_ui(ui, |ui| {
+                                for s in &self.data.servers {
+                                    ui.selectable_value(&mut lease.server, s.name.clone(), &s.name);
+                                }
+                            });
+                        
+                        // If server changed, suggest first free IP
+                        if lease.server != old_server {
+                            if let Some(server_info) = self.data.servers.iter().find(|s| s.name == lease.server) {
+                                if let Some(net) = find_network_for_server(server_info, &self.data.networks) {
+                                    if let Some(free_ip) = find_first_free_ip(net, &self.data.leases) {
+                                        lease.address = Some(free_ip);
+                                    }
+                                }
+                            }
+                        }
                         ui.end_row();
 
                         ui.label("Коментар:");

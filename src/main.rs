@@ -1,6 +1,6 @@
-mod ssh_client;
-mod lease_parser;
 mod app;
+mod ssh_client;
+mod mikrotik_data;
 
 use app::WhitelistApp;
 
@@ -11,7 +11,7 @@ fn main() -> eframe::Result {
             .with_min_inner_size([400.0, 300.0]),
         ..Default::default()
     };
-    
+
     eframe::run_native(
         "MikroTik Whitelist Editor",
         native_options,
