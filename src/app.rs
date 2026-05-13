@@ -3,33 +3,44 @@ use crate::ssh_client::SSHClient;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 
-#[derive(PartialEq)]
+#[derive(PartialEq, serde::Deserialize, serde::Serialize)]
 enum Tab {
     Editor,
     Instructions,
 }
 
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(default)]
 pub struct WhitelistApp {
     // Connection info
     host: String,
     user: String,
+
+    #[serde(skip)]
     pass: String,
 
     // State
+    #[serde(skip)]
     client: Option<SSHClient>,
+    #[serde(skip)]
     leases: Vec<Lease>,
+    #[serde(skip)]
     status: String,
 
     // UI state
+    #[serde(skip)]
     editing_lease: Option<Lease>,
+    #[serde(skip)]
     original_lease: Option<Lease>,
+    #[serde(skip)]
     deleting_lease: Option<Lease>,
+    #[serde(skip)]
     is_adding: bool,
     selected_tab: Tab,
 }
 
-impl WhitelistApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+impl Default for WhitelistApp {
+    fn default() -> Self {
         Self {
             host: "192.168.88.1".to_owned(),
             user: "admin".to_owned(),
@@ -43,6 +54,15 @@ impl WhitelistApp {
             is_adding: false,
             selected_tab: Tab::Editor,
         }
+    }
+}
+
+impl WhitelistApp {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        if let Some(storage) = cc.storage {
+            return eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
+        }
+        Self::default()
     }
 
     fn connect_and_refresh(&mut self) {
@@ -164,6 +184,10 @@ fn generate_find_query(lease: &Lease) -> String {
     }
 
 impl eframe::App for WhitelistApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, eframe::APP_KEY, self);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         ui.vertical(|ui| {
             ui.add_space(5.0);

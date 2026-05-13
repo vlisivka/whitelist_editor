@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-eframe = "0.34"
+eframe = { version = "0.34", features = ["persistence"] }
 egui = "0.34"
 egui_extras = { version = "0.34" }
 ssh-rs = "0.4"
