@@ -23,7 +23,6 @@ pub struct WhitelistApp {
     // UI state
     editing_lease: Option<Lease>,
     is_adding: bool,
-    search_query: String,
     selected_tab: Tab,
 }
 
@@ -35,24 +34,23 @@ impl WhitelistApp {
             pass: "".to_owned(),
             client: None,
             leases: Vec::new(),
-            status: "Not connected".to_owned(),
+            status: "Не під'єднано".to_owned(),
             editing_lease: None,
             is_adding: false,
-            search_query: String::new(),
             selected_tab: Tab::Editor,
         }
     }
 
     fn connect_and_refresh(&mut self) {
-        self.status = "Connecting...".to_owned();
+        self.status = "З'єднуюсь...".to_owned();
         match SSHClient::connect(&self.host, &self.user, &self.pass) {
             Ok(client) => {
-                self.status = "Connected".to_owned();
+                self.status = "З'єднано".to_owned();
                 self.client = Some(client);
                 self.refresh_leases();
             }
             Err(e) => {
-                self.status = format!("Connection error: {}", e);
+                self.status = format!("Помилка під'єднання: {}", e);
             }
         }
     }
@@ -62,10 +60,10 @@ impl WhitelistApp {
             match client.execute("/ip/dhcp-server/lease/export") {
                 Ok(output) => {
                     self.leases = parse_leases(&output);
-                    self.status = format!("Loaded {} leases", self.leases.len());
+                    self.status = format!("Завантажено {} адрес", self.leases.len());
                 }
                 Err(e) => {
-                    self.status = format!("Error fetching leases: {}", e);
+                    self.status = format!("Помилка при отриманні адрес: {}", e);
                 }
             }
         }
@@ -97,11 +95,11 @@ impl WhitelistApp {
 
             match client.execute(&cmd) {
                 Ok(_) => {
-                    self.status = "Lease saved successfully".to_owned();
+                    self.status = "Адреса успішно збережена".to_owned();
                     self.refresh_leases();
                 }
                 Err(e) => {
-                    self.status = format!("Error saving lease: {}", e);
+                    self.status = format!("Помилка збереження адреси: {}", e);
                 }
             }
         }
@@ -121,19 +119,19 @@ impl eframe::App for WhitelistApp {
 
             match self.selected_tab {
                 Tab::Editor => {
-                    ui.heading("MikroTik Whitelist Editor");
+                    ui.heading("Редактор білих адрес для MikroTik");
 
                     // Connection Panel
                     ui.group(|ui| {
                         ui.horizontal(|ui| {
-                            ui.label("Host:");
+                            ui.label("Мікротик:");
                             ui.text_edit_singleline(&mut self.host);
-                            ui.label("User:");
+                            ui.label("Користувач:");
                             ui.text_edit_singleline(&mut self.user);
-                            ui.label("Pass:");
+                            ui.label("Пароль:");
                             ui.add(egui::TextEdit::singleline(&mut self.pass).password(true));
 
-                            if ui.button("Connect").clicked() {
+                            if ui.button("З'єднатися").clicked() {
                                 self.connect_and_refresh();
                             }
                         });
@@ -143,12 +141,12 @@ impl eframe::App for WhitelistApp {
 
                     // Status Bar
                     ui.horizontal(|ui| {
-                        ui.label(format!("Status: {}", self.status));
+                        ui.label(format!("Статус: {}", self.status));
                         if self.client.is_some() {
-                            if ui.button("Refresh").clicked() {
+                            if ui.button("Оновити").clicked() {
                                 self.refresh_leases();
                             }
-                            if ui.button("Add New Lease").clicked() {
+                            if ui.button("Додати адресу").clicked() {
                                 self.editing_lease = Some(Lease::default());
                                 self.is_adding = true;
                             }
@@ -187,25 +185,25 @@ impl eframe::App for WhitelistApp {
                             table
                                 .header(25.0, |mut header| {
                                     header.col(|ui| {
-                                        style_header(ui, "#");
+                                        style_header(ui, "№");
                                     });
                                     header.col(|ui| {
-                                        style_header(ui, "Actions");
+                                        style_header(ui, "Дії");
                                     });
                                     header.col(|ui| {
-                                        style_header(ui, "Blocked");
+                                        style_header(ui, "Блок");
                                     });
                                     header.col(|ui| {
-                                        style_header(ui, "Address");
+                                        style_header(ui, "IP-адреса");
                                     });
                                     header.col(|ui| {
-                                        style_header(ui, "MAC Address");
+                                        style_header(ui, "MAC-адреса");
                                     });
                                     header.col(|ui| {
-                                        style_header(ui, "Server");
+                                        style_header(ui, "Сервер");
                                     });
                                     header.col(|ui| {
-                                        style_header(ui, "Comment");
+                                        style_header(ui, "Коментар");
                                     });
                                 })
                                 .body(|body| {
@@ -217,20 +215,20 @@ impl eframe::App for WhitelistApp {
                                             ui.label(row_index.to_string());
                                         });
                                         row.col(|ui| {
-                                            if ui.button("Edit").clicked() {
+                                            if ui.button("Редагувати").clicked() {
                                                 self.editing_lease = Some(lease.clone());
                                                 self.is_adding = false;
                                             }
                                         });
                                         row.col(|ui| {
-                                            let mut blocked = lease.block_access;
-                                            ui.add_enabled(
-                                                false,
-                                                egui::Checkbox::without_text(&mut blocked),
-                                            );
+                                            if lease.block_access {
+                                                ui.label(egui::RichText::new("  🔒").size(16.0));
+                                            } else {
+                                                ui.label(egui::RichText::new("   ").size(16.0));
+                                            }
                                         });
                                         row.col(|ui| {
-                                            ui.label(lease.address.as_deref().unwrap_or("-"));
+                                            ui.label(lease.address.as_deref().unwrap_or(" "));
                                         });
                                         row.col(|ui| {
                                             ui.label(&lease.mac_address);
@@ -245,7 +243,7 @@ impl eframe::App for WhitelistApp {
                                 });
                         });
                     } else if self.client.is_some() {
-                        ui.label("No leases found or not loaded yet.");
+                        ui.label("Не завантажено адреси або не знайдено адрес.");
                     }
                 }
                 Tab::Instructions => {
@@ -339,9 +337,9 @@ impl eframe::App for WhitelistApp {
         if let Some(mut lease) = self.editing_lease.take() {
             let mut open = true;
             let title = if self.is_adding {
-                "Add Lease"
+                "Додавання адреси"
             } else {
-                "Edit Lease"
+                "Редагування адреси"
             };
 
             egui::Window::new(title).open(&mut open).show(ctx, |ui| {
@@ -349,7 +347,7 @@ impl eframe::App for WhitelistApp {
                     .num_columns(2)
                     .spacing([40.0, 4.0])
                     .show(ui, |ui| {
-                        ui.label("Address:");
+                        ui.label("IP-адреса:");
                         let mut address = lease.address.clone().unwrap_or_default();
                         ui.text_edit_singleline(&mut address);
                         lease.address = if address.is_empty() {
@@ -359,32 +357,32 @@ impl eframe::App for WhitelistApp {
                         };
                         ui.end_row();
 
-                        ui.label("MAC Address:");
+                        ui.label("MAC-адреса:");
                         ui.text_edit_singleline(&mut lease.mac_address);
                         ui.end_row();
 
-                        ui.label("Server:");
+                        ui.label("Сервер:");
                         ui.text_edit_singleline(&mut lease.server);
                         ui.end_row();
 
-                        ui.label("Comment:");
+                        ui.label("Коментар:");
                         let mut comment = lease.comment.clone().unwrap_or_default();
                         ui.text_edit_singleline(&mut comment);
                         lease.comment = Some(comment);
                         ui.end_row();
 
-                        ui.label("Block Access:");
+                        ui.label("Заблокувати доступ:");
                         ui.checkbox(&mut lease.block_access, "");
                         ui.end_row();
                     });
 
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
+                    if ui.button("Зберегти").clicked() {
                         self.save_lease(lease.clone(), self.is_adding);
                         should_close = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button("Скасувати").clicked() {
                         should_close = true;
                     }
                 });
