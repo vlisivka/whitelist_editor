@@ -3,6 +3,12 @@ use crate::ssh_client::SSHClient;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 
+#[derive(PartialEq)]
+enum Tab {
+    Editor,
+    Instructions,
+}
+
 pub struct WhitelistApp {
     // Connection info
     host: String,
@@ -18,6 +24,7 @@ pub struct WhitelistApp {
     editing_lease: Option<Lease>,
     is_adding: bool,
     search_query: String,
+    selected_tab: Tab,
 }
 
 impl WhitelistApp {
@@ -32,6 +39,7 @@ impl WhitelistApp {
             editing_lease: None,
             is_adding: false,
             search_query: String::new(),
+            selected_tab: Tab::Editor,
         }
     }
 
@@ -103,119 +111,191 @@ impl WhitelistApp {
 impl eframe::App for WhitelistApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         ui.vertical(|ui| {
-            ui.heading("MikroTik Whitelist Editor");
-
-            // Connection Panel
-            ui.group(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Host:");
-                    ui.text_edit_singleline(&mut self.host);
-                    ui.label("User:");
-                    ui.text_edit_singleline(&mut self.user);
-                    ui.label("Pass:");
-                    ui.add(egui::TextEdit::singleline(&mut self.pass).password(true));
-
-                    if ui.button("Connect").clicked() {
-                        self.connect_and_refresh();
-                    }
-                });
-            });
-
-            ui.add_space(10.0);
-
-            // Status Bar
+            ui.add_space(5.0);
             ui.horizontal(|ui| {
-                ui.label(format!("Status: {}", self.status));
-                if self.client.is_some() {
-                    if ui.button("Refresh").clicked() {
-                        self.refresh_leases();
-                    }
-                    if ui.button("Add New Lease").clicked() {
-                        self.editing_lease = Some(Lease::default());
-                        self.is_adding = true;
+                ui.selectable_value(&mut self.selected_tab, Tab::Editor, "📋 Список адрес");
+                ui.selectable_value(&mut self.selected_tab, Tab::Instructions, "ℹ️ Як знайти MAC");
+            });
+            ui.separator();
+            ui.add_space(5.0);
+
+            match self.selected_tab {
+                Tab::Editor => {
+                    ui.heading("MikroTik Whitelist Editor");
+
+                    // Connection Panel
+                    ui.group(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Host:");
+                            ui.text_edit_singleline(&mut self.host);
+                            ui.label("User:");
+                            ui.text_edit_singleline(&mut self.user);
+                            ui.label("Pass:");
+                            ui.add(egui::TextEdit::singleline(&mut self.pass).password(true));
+
+                            if ui.button("Connect").clicked() {
+                                self.connect_and_refresh();
+                            }
+                        });
+                    });
+
+                    ui.add_space(10.0);
+
+                    // Status Bar
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Status: {}", self.status));
+                        if self.client.is_some() {
+                            if ui.button("Refresh").clicked() {
+                                self.refresh_leases();
+                            }
+                            if ui.button("Add New Lease").clicked() {
+                                self.editing_lease = Some(Lease::default());
+                                self.is_adding = true;
+                            }
+                        }
+                    });
+
+                    ui.add_space(10.0);
+
+                    // Table View
+                    if !self.leases.is_empty() {
+                        egui::ScrollArea::horizontal().show(ui, |ui| {
+                            let table = TableBuilder::new(ui)
+                                .striped(true)
+                                .resizable(true)
+                                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                                .column(Column::auto())
+                                .column(Column::auto()) // Actions
+                                .column(Column::auto()) // Blocked
+                                .column(Column::initial(120.0).at_least(100.0))
+                                .column(Column::initial(150.0).at_least(120.0))
+                                .column(Column::initial(100.0))
+                                .column(Column::initial(200.0).at_least(150.0));
+
+                            table
+                                .header(20.0, |mut header| {
+                                    header.col(|ui| {
+                                        ui.strong("#");
+                                    });
+                                    header.col(|ui| {
+                                        ui.strong("Actions");
+                                    });
+                                    header.col(|ui| {
+                                        ui.strong("Blocked");
+                                    });
+                                    header.col(|ui| {
+                                        ui.strong("Address");
+                                    });
+                                    header.col(|ui| {
+                                        ui.strong("MAC Address");
+                                    });
+                                    header.col(|ui| {
+                                        ui.strong("Server");
+                                    });
+                                    header.col(|ui| {
+                                        ui.strong("Comment");
+                                    });
+                                })
+                                .body(|body| {
+                                    body.rows(25.0, self.leases.len(), |mut row| {
+                                        let row_index = row.index();
+                                        let lease = &self.leases[row_index];
+
+                                        row.col(|ui| {
+                                            ui.label(row_index.to_string());
+                                        });
+                                        row.col(|ui| {
+                                            if ui.button("Edit").clicked() {
+                                                self.editing_lease = Some(lease.clone());
+                                                self.is_adding = false;
+                                            }
+                                        });
+                                        row.col(|ui| {
+                                            let mut blocked = lease.block_access;
+                                            ui.add_enabled(
+                                                false,
+                                                egui::Checkbox::without_text(&mut blocked),
+                                            );
+                                        });
+                                        row.col(|ui| {
+                                            ui.label(lease.address.as_deref().unwrap_or("-"));
+                                        });
+                                        row.col(|ui| {
+                                            ui.label(&lease.mac_address);
+                                        });
+                                        row.col(|ui| {
+                                            ui.label(&lease.server);
+                                        });
+                                        row.col(|ui| {
+                                            ui.label(lease.comment.as_deref().unwrap_or("-"));
+                                        });
+                                    });
+                                });
+                        });
+                    } else if self.client.is_some() {
+                        ui.label("No leases found or not loaded yet.");
                     }
                 }
-            });
+                Tab::Instructions => {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.heading("Як знайти та налаштувати MAC-адресу");
+                        });
+                        ui.add_space(15.0);
 
-            ui.add_space(10.0);
+                        ui.group(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new("🔍 Як дізнатися свою MAC-адресу:").strong().size(16.0));
+                                ui.add_space(5.0);
 
-            // Table View
-            if !self.leases.is_empty() {
-                egui::ScrollArea::horizontal().show(ui, |ui| {
-                    let table = TableBuilder::new(ui)
-                        .striped(true)
-                        .resizable(true)
-                        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                        .column(Column::auto())
-                        .column(Column::auto()) // Actions
-                        .column(Column::auto()) // Blocked
-                        .column(Column::initial(120.0).at_least(100.0))
-                        .column(Column::initial(150.0).at_least(120.0))
-                        .column(Column::initial(100.0))
-                        .column(Column::initial(200.0).at_least(150.0));
+                                ui.label(egui::RichText::new("• Android:").strong());
+                                ui.label("  Налаштування -> Про телефон -> Статус (або Відомості про обладнання).");
+                                ui.add_space(5.0);
 
-                    table
-                        .header(20.0, |mut header| {
-                            header.col(|ui| {
-                                ui.strong("#");
-                            });
-                            header.col(|ui| {
-                                ui.strong("Actions");
-                            });
-                            header.col(|ui| {
-                                ui.strong("Blocked");
-                            });
-                            header.col(|ui| {
-                                ui.strong("Address");
-                            });
-                            header.col(|ui| {
-                                ui.strong("MAC Address");
-                            });
-                            header.col(|ui| {
-                                ui.strong("Server");
-                            });
-                            header.col(|ui| {
-                                ui.strong("Comment");
-                            });
-                        })
-                        .body(|body| {
-                            body.rows(25.0, self.leases.len(), |mut row| {
-                                let row_index = row.index();
-                                let lease = &self.leases[row_index];
+                                ui.label(egui::RichText::new("• iPhone/iPad (iOS):").strong());
+                                ui.label("  Параметри -> Загальні -> Про пристрій -> Адреса Wi-Fi.");
+                                ui.add_space(5.0);
 
-                                row.col(|ui| {
-                                    ui.label(row_index.to_string());
-                                });
-                                row.col(|ui| {
-                                    if ui.button("Edit").clicked() {
-                                        self.editing_lease = Some(lease.clone());
-                                        self.is_adding = false;
-                                    }
-                                });
-                                row.col(|ui| {
-                                    let mut blocked = lease.block_access;
-                                    ui.add_enabled(
-                                        false,
-                                        egui::Checkbox::without_text(&mut blocked),
-                                    );
-                                });
-                                row.col(|ui| {
-                                    ui.label(lease.address.as_deref().unwrap_or("-"));
-                                });
-                                row.col(|ui| {
-                                    ui.label(&lease.mac_address);
-                                });
-                                row.col(|ui| {
-                                    ui.label(&lease.server);
-                                });
-                                row.col(|ui| {
-                                    ui.label(lease.comment.as_deref().unwrap_or("-"));
-                                });
+                                ui.label(egui::RichText::new("• Windows:").strong());
+                                ui.label("  Відкрийте Командний рядок (cmd) і введіть `getmac` або `ipconfig /all`.");
+                                ui.label("  Або: Налаштування -> Мережа та Інтернет -> Wi-Fi -> Властивості обладнання.");
+                                ui.add_space(5.0);
+
+                                ui.label(egui::RichText::new("• macOS:").strong());
+                                ui.label("  Системні параметри -> Мережа -> Wi-Fi -> Додатково -> Обладнання.");
                             });
                         });
-                });
-            } else if self.client.is_some() {
-                ui.label("No leases found or not loaded yet.");
+
+                        ui.add_space(20.0);
+
+                        ui.group(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new("🔒 Як зробити MAC-адресу постійною (вимкнути випадкову адресу):").strong().size(16.0));
+                                ui.add_space(5.0);
+                                ui.label("Більшість сучасних пристроїв використовують випадкову MAC-адресу для безпеки. Щоб редактор працював правильно, потрібно встановити постійну адресу для вашої мережі.");
+                                ui.add_space(10.0);
+
+                                ui.label(egui::RichText::new("• Android:").strong());
+                                ui.label("  1. Налаштування -> Wi-Fi.");
+                                ui.label("  2. Натисніть на іконку налаштувань (шестерня) біля назви вашої мережі.");
+                                ui.label("  3. Знайдіть пункт 'Тип MAC-адреси'.");
+                                ui.label("  4. Виберіть 'MAC-адреса пристрою' замість 'Рандомізована'.");
+                                ui.add_space(5.0);
+
+                                ui.label(egui::RichText::new("• iPhone/iPad (iOS):").strong());
+                                ui.label("  1. Параметри -> Wi-Fi.");
+                                ui.label("  2. Натисніть кнопку 'i' біля вашої мережі.");
+                                ui.label("  3. Вимкніть перемикач 'Приватна адреса Wi-Fi'.");
+                                ui.add_space(5.0);
+
+                                ui.label(egui::RichText::new("• Windows:").strong());
+                                ui.label("  1. Налаштування -> Мережа та Інтернет -> Wi-Fi.");
+                                ui.label("  2. Виберіть вашу мережу.");
+                                ui.label("  3. Вимкніть 'Випадкові апаратні адреси' (Random Hardware Addresses).");
+                            });
+                        });
+                    });
+                }
             }
         });
 
