@@ -12,7 +12,7 @@ pub struct SSHClient {
 
 impl SSHConnector for SSHClient {
     fn execute(&mut self, command: &str) -> Result<String> {
-        //dbg!(&command);
+        dbg!(&command);
 
         let exec = self
             .session
@@ -25,20 +25,43 @@ impl SSHConnector for SSHClient {
         let result =
             String::from_utf8(output).map_err(|e| anyhow!("Invalid UTF-8 output: {}", e))?;
 
-        //dbg!(&result);
+        dbg!(&result);
 
         Ok(result)
     }
 }
 
 impl SSHClient {
+    pub(crate) fn prepare_address(host: &str) -> String {
+        if host.starts_with('[') {
+            if host.contains("]:") {
+                host.to_string()
+            } else {
+                format!("{}:22", host)
+            }
+        } else {
+            let colons = host.chars().filter(|&c| c == ':').count();
+            if colons > 1 {
+                // IPv6 address without brackets and without port
+                format!("[{}]:22", host)
+            } else if colons == 1 {
+                // IPv4:port or hostname:port
+                host.to_string()
+            } else {
+                // IPv4 or hostname without port
+                format!("{}:22", host)
+            }
+        }
+    }
+
     pub fn connect(host: &str, username: &str, password: &str) -> Result<Self> {
+        let full_addr = Self::prepare_address(host);
         let session = ssh::create_session()
             .username(username)
             .password(password)
             .add_kex_algorithms(algorithm::Kex::Curve25519Sha256)
             .add_pubkey_algorithms(algorithm::PubKey::SshEd25519)
-            .connect(format!("{}:22", host))
+            .connect(full_addr)
             .map_err(|e| anyhow!("Connection failed: {}", e))?
             .run_local();
 
@@ -59,5 +82,42 @@ impl SSHConnector for MockSSHClient {
         } else {
             Err(anyhow!("Mock response not found for command: {}", command))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_host_port() {
+        assert_eq!(
+            SSHClient::prepare_address("192.168.88.1"),
+            "192.168.88.1:22"
+        );
+        assert_eq!(
+            SSHClient::prepare_address("192.168.88.1:2222"),
+            "192.168.88.1:2222"
+        );
+        assert_eq!(
+            SSHClient::prepare_address("router.local"),
+            "router.local:22"
+        );
+        assert_eq!(
+            SSHClient::prepare_address("router.local:2222"),
+            "router.local:2222"
+        );
+        assert_eq!(
+            SSHClient::prepare_address("2001:db8::1"),
+            "[2001:db8::1]:22"
+        );
+        assert_eq!(
+            SSHClient::prepare_address("[2001:db8::1]:2222"),
+            "[2001:db8::1]:2222"
+        );
+        assert_eq!(
+            SSHClient::prepare_address("[2001:db8::1]"),
+            "[2001:db8::1]:22"
+        );
     }
 }

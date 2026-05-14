@@ -175,10 +175,9 @@ fn generate_find_query(lease: &Lease) -> String {
         parts.push(format!("comment={}", escape_mikrotik(comment)));
     }
 
-    parts.push(format!(
-        "block-access={}",
-        if lease.block_access { "yes" } else { "no" }
-    ));
+    if lease.block_access {
+        parts.push("block-access=yes".to_owned());
+    }
 
     if let Some(client_id) = lease.client_id.as_ref().filter(|c| !c.is_empty()) {
         parts.push(format!("client-id={}", escape_mikrotik(client_id)));
