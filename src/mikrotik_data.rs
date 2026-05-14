@@ -147,11 +147,11 @@ pub fn find_network_for_server<'a>(
     networks: &'a [DhcpNetwork],
 ) -> Option<&'a DhcpNetwork> {
     // Priority 1: Match by comment
-    if let Some(net) = server
-        .comment
-        .as_ref()
-        .and_then(|s_comment| networks.iter().find(|n| n.comment.as_ref() == Some(s_comment)))
-    {
+    if let Some(net) = server.comment.as_ref().and_then(|s_comment| {
+        networks
+            .iter()
+            .find(|n| n.comment.as_ref() == Some(s_comment))
+    }) {
         return Some(net);
     }
 
@@ -490,7 +490,10 @@ add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.16
 
     #[test]
     fn test_unescape_mikrotik() {
-        assert_eq!(super::unescape_mikrotik(r#"\"Hello world\""#), r#""Hello world""#);
+        assert_eq!(
+            super::unescape_mikrotik(r#"\"Hello world\""#),
+            r#""Hello world""#
+        );
         assert_eq!(super::unescape_mikrotik(r#"Hello\_world"#), "Hello world");
         assert_eq!(super::unescape_mikrotik(r#"\D0\B0\D0\B1\D1\82"#), "абт");
         assert_eq!(super::unescape_mikrotik(r#"\?\$"#), "?$");
@@ -499,8 +502,14 @@ add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.16
 
     #[test]
     fn test_escape_mikrotik() {
-        assert_eq!(super::escape_mikrotik("Привіт"), r#""\D0\9F\D1\80\D0\B8\D0\B2\D1\96\D1\82""#);
-        assert_eq!(super::escape_mikrotik(r#"Path with "quotes""#), r#""Path with \"quotes\"""#);
+        assert_eq!(
+            super::escape_mikrotik("Привіт"),
+            r#""\D0\9F\D1\80\D0\B8\D0\B2\D1\96\D1\82""#
+        );
+        assert_eq!(
+            super::escape_mikrotik(r#"Path with "quotes""#),
+            r#""Path with \"quotes\"""#
+        );
         assert_eq!(super::escape_mikrotik("simple"), r#""simple""#);
     }
 }

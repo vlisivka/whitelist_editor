@@ -1,6 +1,6 @@
 use crate::mikrotik_data::{
-    DhcpData, Lease, find_first_free_ip, find_network_for_server, is_ip_in_range, is_ip_unique,
-    is_valid_ipv4, is_valid_mac, parse_all, escape_mikrotik,
+    DhcpData, Lease, escape_mikrotik, find_first_free_ip, find_network_for_server, is_ip_in_range,
+    is_ip_unique, is_valid_ipv4, is_valid_mac, parse_all,
 };
 use crate::ssh_client::{SSHClient, SSHConnector};
 use eframe::egui;
@@ -160,7 +160,10 @@ impl WhitelistApp {
 }
 
 fn generate_find_query(lease: &Lease) -> String {
-    let mut parts = vec![format!("mac-address={}", escape_mikrotik(&lease.mac_address))];
+    let mut parts = vec![format!(
+        "mac-address={}",
+        escape_mikrotik(&lease.mac_address)
+    )];
 
     if let Some(addr) = lease.address.as_ref().filter(|a| !a.is_empty()) {
         parts.push(format!("address={}", escape_mikrotik(addr)));
@@ -249,16 +252,17 @@ impl eframe::App for WhitelistApp {
                     if !self.data.leases.is_empty() {
                         egui::ScrollArea::horizontal().show(ui, |ui| {
                             let table = TableBuilder::new(ui)
+                                .id_salt("leases_table")
                                 .striped(true)
                                 .resizable(true)
                                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                                .column(Column::auto())
-                                .column(Column::auto()) // Actions
-                                .column(Column::auto()) // Blocked
-                                .column(Column::initial(120.0).at_least(100.0))
-                                .column(Column::initial(150.0).at_least(120.0))
-                                .column(Column::initial(100.0))
-                                .column(Column::initial(200.0).at_least(150.0));
+                                .column(Column::initial(30.0).at_least(30.0)) // №
+                                .column(Column::initial(60.0).at_least(60.0)) // Дії
+                                .column(Column::initial(40.0).at_least(40.0)) // Блок
+                                .column(Column::initial(100.0).at_least(100.0)) // IP
+                                .column(Column::initial(120.0).at_least(120.0)) // MAC
+                                .column(Column::initial(80.0).at_least(80.0)) // Сервер
+                                .column(Column::remainder()); // Коментар
 
                             let header_bg = egui::Color32::from_gray(220);
                             let header_text = egui::Color32::BLACK;
@@ -273,7 +277,7 @@ impl eframe::App for WhitelistApp {
                             };
 
                             table
-                                .header(25.0, |mut header| {
+                                .header(28.0, |mut header| {
                                     header.col(|ui| {
                                         style_header(ui, "№");
                                     });
@@ -297,7 +301,7 @@ impl eframe::App for WhitelistApp {
                                     });
                                 })
                                 .body(|body| {
-                                    body.rows(25.0, self.data.leases.len(), |mut row| {
+                                    body.rows(28.0, self.data.leases.len(), |mut row| {
                                         let row_index = row.index();
                                         let lease = self.data.leases[row_index].clone();
 
@@ -462,7 +466,12 @@ impl eframe::App for WhitelistApp {
                                 .iter()
                                 .find(|s| s.name == lease.server)
                                 .and_then(|si| find_network_for_server(si, &self.data.networks))
-                                && !is_valid_ipv4(&address, net, &self.data.leases, &lease.mac_address)
+                                && !is_valid_ipv4(
+                                    &address,
+                                    net,
+                                    &self.data.leases,
+                                    &lease.mac_address,
+                                )
                             {
                                 is_valid = false;
                                 // Show specific error messages
@@ -481,10 +490,13 @@ impl eframe::App for WhitelistApp {
                                         .color(egui::Color32::LIGHT_RED)
                                         .size(10.0),
                                     );
-                                } else if !is_ip_unique(&address, &self.data.leases, &lease.mac_address)
-                                {
+                                } else if !is_ip_unique(
+                                    &address,
+                                    &self.data.leases,
+                                    &lease.mac_address,
+                                ) {
                                     ui.label(
-                                        egui::RichText::new("⚠️ Ця адреса вже використовується")
+                                        egui::RichText::new("⚠ Ця адреса вже використовується")
                                             .color(egui::Color32::LIGHT_RED)
                                             .size(10.0),
                                     );
@@ -576,7 +588,7 @@ impl eframe::App for WhitelistApp {
                 .show(ctx, |ui| {
                     ui.vertical(|ui| {
                         ui.label(
-                            egui::RichText::new("⚠️ Ви впевнені, що хочете видалити цей запис?")
+                            egui::RichText::new("⚠ Ви впевнені, що хочете видалити цей запис?")
                                 .heading()
                                 .color(egui::Color32::RED),
                         );
