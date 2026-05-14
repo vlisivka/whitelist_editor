@@ -1,9 +1,9 @@
 use crate::mikrotik_data::{DhcpData, Lease, parse_all, find_network_for_server, is_ip_in_range, is_ip_unique, find_first_free_ip};
-use crate::ssh_client::SSHClient;
+use crate::ssh_client::{SSHClient, SSHConnector};
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 
-#[derive(PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(PartialEq, Debug, serde::Deserialize, serde::Serialize)]
 enum Tab {
     Editor,
     Instructions,
@@ -21,7 +21,7 @@ pub struct WhitelistApp {
 
     // State
     #[serde(skip)]
-    client: Option<SSHClient>,
+    client: Option<Box<dyn SSHConnector>>,
     #[serde(skip)]
     data: DhcpData,
     #[serde(skip)]
@@ -71,7 +71,7 @@ impl WhitelistApp {
         match SSHClient::connect(&self.host, &self.user, &self.pass) {
             Ok(client) => {
                 self.status = "З'єднано".to_owned();
-                self.client = Some(client);
+                self.client = Some(Box::new(client));
                 self.refresh_data();
             }
             Err(e) => {
@@ -593,5 +593,60 @@ impl eframe::App for WhitelistApp {
                 self.deleting_lease = Some(lease);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ssh_client::MockSSHClient;
+    use std::collections::HashMap;
+
+    const MIKROTIK_EXPORT: &str = r#"
+/ip dhcp-server
+add add-arp=yes comment=guest interface=GSTVLAN name=guest-dhcp
+add add-arp=yes comment=corp interface=CRPVLAN lease-time=1h name=corp-dhcp
+add add-arp=yes comment=manage interface=MNGVLAN name=mng-server
+/ip dhcp-server lease
+add address=172.16.20.217 block-access=yes mac-address=A4:C6:9A:08:86:C8 server=corp-dhcp
+add address=172.22.2.29 comment=029SYN mac-address=F4:1E:57:7F:D1:57 server=mng-server
+/ip dhcp-server network
+add address=172.16.20.0/23 comment=corp dns-server=172.16.20.1 gateway=172.16.20.1
+add address=172.22.2.0/24 comment=manage dns-server=172.22.2.2 gateway=172.22.2.1
+add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.168.10.1
+"#;
+
+    #[test]
+    fn test_app_initial_state() {
+        let app = WhitelistApp::default();
+        assert_eq!(app.selected_tab, Tab::Editor);
+        assert_eq!(app.status, "Не під'єднано");
+        assert!(app.client.is_none());
+    }
+
+    #[test]
+    fn test_refresh_data_with_mock() {
+        let mut app = WhitelistApp::default();
+        let mut responses = HashMap::new();
+        responses.insert("/ip/dhcp-server/export".to_string(), MIKROTIK_EXPORT.to_string());
+        
+        let mock_client = MockSSHClient { responses };
+        app.client = Some(Box::new(mock_client));
+        
+        app.refresh_data();
+        
+        assert_eq!(app.data.leases.len(), 2);
+        assert_eq!(app.data.servers.len(), 3);
+        assert_eq!(app.data.networks.len(), 3);
+        assert!(app.status.contains("Завантажено 2 адрес"));
+    }
+
+    #[test]
+    fn test_tab_switching() {
+        let mut app = WhitelistApp::default();
+        assert_eq!(app.selected_tab, Tab::Editor);
+        
+        app.selected_tab = Tab::Instructions;
+        assert_eq!(app.selected_tab, Tab::Instructions);
     }
 }
