@@ -1,6 +1,6 @@
 mod app;
-mod ssh_client;
 mod mikrotik_data;
+mod ssh_client;
 
 use app::WhitelistApp;
 

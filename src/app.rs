@@ -1,4 +1,7 @@
-use crate::mikrotik_data::{DhcpData, Lease, parse_all, find_network_for_server, is_ip_in_range, is_ip_unique, find_first_free_ip};
+use crate::mikrotik_data::{
+    DhcpData, Lease, find_first_free_ip, find_network_for_server, is_ip_in_range, is_ip_unique,
+    is_valid_ipv4, is_valid_mac, parse_all,
+};
 use crate::ssh_client::{SSHClient, SSHConnector};
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
@@ -85,7 +88,11 @@ impl WhitelistApp {
             match client.execute("/ip/dhcp-server/export") {
                 Ok(output) => {
                     self.data = parse_all(&output);
-                    self.status = format!("Завантажено {} адрес, {} серверів", self.data.leases.len(), self.data.servers.len());
+                    self.status = format!(
+                        "Завантажено {} адрес, {} серверів",
+                        self.data.leases.len(),
+                        self.data.servers.len()
+                    );
                 }
                 Err(e) => {
                     self.status = format!("Помилка при отриманні даних: {}", e);
@@ -150,39 +157,38 @@ impl WhitelistApp {
             }
         }
     }
-
 }
 
 fn generate_find_query(lease: &Lease) -> String {
-        let mut parts = vec![format!("mac-address=\"{}\"", lease.mac_address)];
+    let mut parts = vec![format!("mac-address=\"{}\"", lease.mac_address)];
 
-        if let Some(addr) = &lease.address {
-            if !addr.is_empty() {
-                parts.push(format!("address=\"{}\"", addr));
-            }
+    if let Some(addr) = &lease.address {
+        if !addr.is_empty() {
+            parts.push(format!("address=\"{}\"", addr));
         }
-
-        parts.push(format!("server=\"{}\"", lease.server));
-
-        if let Some(comment) = &lease.comment {
-            if !comment.is_empty() {
-                parts.push(format!("comment=\"{}\"", comment));
-            }
-        }
-
-        parts.push(format!(
-            "block-access={}",
-            if lease.block_access { "yes" } else { "no" }
-        ));
-
-        if let Some(client_id) = &lease.client_id {
-            if !client_id.is_empty() {
-                parts.push(format!("client-id=\"{}\"", client_id));
-            }
-        }
-
-        format!("[find {}]", parts.join(" "))
     }
+
+    parts.push(format!("server=\"{}\"", lease.server));
+
+    if let Some(comment) = &lease.comment {
+        if !comment.is_empty() {
+            parts.push(format!("comment=\"{}\"", comment));
+        }
+    }
+
+    parts.push(format!(
+        "block-access={}",
+        if lease.block_access { "yes" } else { "no" }
+    ));
+
+    if let Some(client_id) = &lease.client_id {
+        if !client_id.is_empty() {
+            parts.push(format!("client-id=\"{}\"", client_id));
+        }
+    }
+
+    format!("[find {}]", parts.join(" "))
+}
 
 impl eframe::App for WhitelistApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -362,7 +368,7 @@ impl eframe::App for WhitelistApp {
                                         ui.set_min_width(ui.available_width());
                                         ui.label(egui::RichText::new("🔍 Як дізнатися свою MAC-адресу:").strong().size(16.0).color(section_text));
                                     });
-                                
+
                                 ui.add_space(5.0);
 
                                 ui.label(egui::RichText::new("• Android:").heading());
@@ -439,6 +445,8 @@ impl eframe::App for WhitelistApp {
             };
 
             egui::Window::new(title).open(&mut open).show(ctx, |ui| {
+                let mut is_valid = true;
+
                 egui::Grid::new("edit_grid")
                     .num_columns(2)
                     .spacing([40.0, 4.0])
@@ -446,39 +454,77 @@ impl eframe::App for WhitelistApp {
                         ui.label("IP-адреса:");
                         ui.vertical(|ui| {
                             let mut address = lease.address.clone().unwrap_or_default();
-                            let _response = ui.text_edit_singleline(&mut address);
+                            let _ip_edit_resp = ui.text_edit_singleline(&mut address);
                             lease.address = if address.is_empty() {
                                 None
                             } else {
                                 Some(address.clone())
                             };
 
-                            // Validation
-                            if !address.is_empty() {
-                                let mut valid = true;
-                                if !is_ip_unique(&address, &self.data.leases, &lease.mac_address) {
-                                    ui.label(egui::RichText::new("⚠️ Ця адреса вже використовується").color(egui::Color32::KHAKI).size(10.0));
-                                    valid = false;
-                                }
-
-                                if let Some(server_info) = self.data.servers.iter().find(|s| s.name == lease.server) {
-                                    if let Some(net) = find_network_for_server(server_info, &self.data.networks) {
-                                        if !is_ip_in_range(&address, net) {
-                                            ui.label(egui::RichText::new(format!("❌ Поза діапазоном {}", net.address)).color(egui::Color32::LIGHT_RED).size(10.0));
-                                            valid = false;
+                            // Validation logic
+                            if let Some(server_info) =
+                                self.data.servers.iter().find(|s| s.name == lease.server)
+                            {
+                                if let Some(net) =
+                                    find_network_for_server(server_info, &self.data.networks)
+                                {
+                                    if !is_valid_ipv4(
+                                        &address,
+                                        net,
+                                        &self.data.leases,
+                                        &lease.mac_address,
+                                    ) {
+                                        is_valid = false;
+                                        // Show specific error messages
+                                        if address.parse::<std::net::Ipv4Addr>().is_err() {
+                                            ui.label(
+                                                egui::RichText::new("❌ Невірний формат IP")
+                                                    .color(egui::Color32::LIGHT_RED)
+                                                    .size(10.0),
+                                            );
+                                        } else if !is_ip_in_range(&address, net) {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "❌ Поза діапазоном {}",
+                                                    net.address
+                                                ))
+                                                .color(egui::Color32::LIGHT_RED)
+                                                .size(10.0),
+                                            );
+                                        } else if !is_ip_unique(
+                                            &address,
+                                            &self.data.leases,
+                                            &lease.mac_address,
+                                        ) {
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "⚠️ Ця адреса вже використовується",
+                                                )
+                                                .color(egui::Color32::LIGHT_RED)
+                                                .size(10.0),
+                                            );
                                         }
                                     }
-                                }
-
-                                if !valid {
-                                    // Visual indication on the text edit (not directly supported by egui without custom painter, but label is good)
                                 }
                             }
                         });
                         ui.end_row();
 
                         ui.label("MAC-адреса:");
-                        ui.text_edit_singleline(&mut lease.mac_address);
+                        ui.vertical(|ui| {
+                            ui.text_edit_singleline(&mut lease.mac_address);
+
+                            if !is_valid_mac(&lease.mac_address) {
+                                is_valid = false;
+                                ui.label(
+                                    egui::RichText::new(
+                                        "❌ Невірний формат MAC (XX:XX:XX:XX:XX:XX)",
+                                    )
+                                    .color(egui::Color32::LIGHT_RED)
+                                    .size(10.0),
+                                );
+                            }
+                        });
                         ui.end_row();
 
                         ui.label("Сервер:");
@@ -490,12 +536,18 @@ impl eframe::App for WhitelistApp {
                                     ui.selectable_value(&mut lease.server, s.name.clone(), &s.name);
                                 }
                             });
-                        
+
                         // If server changed, suggest first free IP
                         if lease.server != old_server {
-                            if let Some(server_info) = self.data.servers.iter().find(|s| s.name == lease.server) {
-                                if let Some(net) = find_network_for_server(server_info, &self.data.networks) {
-                                    if let Some(free_ip) = find_first_free_ip(net, &self.data.leases) {
+                            if let Some(server_info) =
+                                self.data.servers.iter().find(|s| s.name == lease.server)
+                            {
+                                if let Some(net) =
+                                    find_network_for_server(server_info, &self.data.networks)
+                                {
+                                    if let Some(free_ip) =
+                                        find_first_free_ip(net, &self.data.leases)
+                                    {
                                         lease.address = Some(free_ip);
                                     }
                                 }
@@ -516,7 +568,8 @@ impl eframe::App for WhitelistApp {
 
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Зберегти").clicked() {
+                    let save_btn = egui::Button::new("Зберегти");
+                    if ui.add_enabled(is_valid, save_btn).clicked() {
                         self.save_lease(lease.clone(), self.is_adding);
                         should_close = true;
                     }
@@ -543,7 +596,11 @@ impl eframe::App for WhitelistApp {
                 .collapsible(false)
                 .show(ctx, |ui| {
                     ui.vertical(|ui| {
-                        ui.label(egui::RichText::new("⚠️ Ви впевнені, що хочете видалити цей запис?").heading().color(egui::Color32::RED));
+                        ui.label(
+                            egui::RichText::new("⚠️ Ви впевнені, що хочете видалити цей запис?")
+                                .heading()
+                                .color(egui::Color32::RED),
+                        );
                         ui.label("Цю дію неможливо буде скасувати.");
                         ui.add_space(10.0);
 
@@ -569,7 +626,7 @@ impl eframe::App for WhitelistApp {
                                     ui.end_row();
 
                                     ui.label("Заблоковано:");
-                                    ui.label(if lease.block_access {"так"} else {"ні"});
+                                    ui.label(if lease.block_access { "так" } else { "ні" });
                                     ui.end_row();
                                 });
                         });
@@ -628,13 +685,16 @@ add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.16
     fn test_refresh_data_with_mock() {
         let mut app = WhitelistApp::default();
         let mut responses = HashMap::new();
-        responses.insert("/ip/dhcp-server/export".to_string(), MIKROTIK_EXPORT.to_string());
-        
+        responses.insert(
+            "/ip/dhcp-server/export".to_string(),
+            MIKROTIK_EXPORT.to_string(),
+        );
+
         let mock_client = MockSSHClient { responses };
         app.client = Some(Box::new(mock_client));
-        
+
         app.refresh_data();
-        
+
         assert_eq!(app.data.leases.len(), 2);
         assert_eq!(app.data.servers.len(), 3);
         assert_eq!(app.data.networks.len(), 3);
@@ -645,7 +705,7 @@ add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.16
     fn test_tab_switching() {
         let mut app = WhitelistApp::default();
         assert_eq!(app.selected_tab, Tab::Editor);
-        
+
         app.selected_tab = Tab::Instructions;
         assert_eq!(app.selected_tab, Tab::Instructions);
     }

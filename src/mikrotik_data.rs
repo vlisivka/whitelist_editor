@@ -1,7 +1,7 @@
+use ipnet::Ipv4Net;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
-use ipnet::Ipv4Net;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct Lease {
@@ -139,15 +139,21 @@ pub fn find_network_for_server<'a>(
 ) -> Option<&'a DhcpNetwork> {
     // Priority 1: Match by comment
     if let Some(s_comment) = &server.comment {
-        if let Some(net) = networks.iter().find(|n| n.comment.as_ref() == Some(s_comment)) {
+        if let Some(net) = networks
+            .iter()
+            .find(|n| n.comment.as_ref() == Some(s_comment))
+        {
             return Some(net);
         }
     }
-    
+
     // Priority 2: Fallback (can't really match by interface easily without more data)
     // In many cases, people use the same name or comment.
     // If no comment, maybe try matching server name with network comment?
-    if let Some(net) = networks.iter().find(|n| n.comment.as_ref() == Some(&server.name)) {
+    if let Some(net) = networks
+        .iter()
+        .find(|n| n.comment.as_ref() == Some(&server.name))
+    {
         return Some(net);
     }
 
@@ -166,18 +172,15 @@ pub fn is_ip_in_range(ip: &str, network: &DhcpNetwork) -> bool {
     net_parsed.contains(&ip_parsed)
 }
 
-pub fn find_first_free_ip(
-    network: &DhcpNetwork,
-    existing_leases: &[Lease],
-) -> Option<String> {
+pub fn find_first_free_ip(network: &DhcpNetwork, existing_leases: &[Lease]) -> Option<String> {
     let net_parsed: Ipv4Net = network.address.parse().ok()?;
     let gateway: Option<Ipv4Addr> = network.gateway.as_ref().and_then(|g| g.parse().ok());
-    
+
     let mut taken_ips: std::collections::HashSet<Ipv4Addr> = existing_leases
         .iter()
         .filter_map(|l| l.address.as_ref()?.parse().ok())
         .collect();
-    
+
     if let Some(g) = gateway {
         taken_ips.insert(g);
     }
@@ -197,9 +200,45 @@ pub fn is_ip_unique(ip: &str, existing_leases: &[Lease], current_mac: &str) -> b
         return true;
     }
 
-    !existing_leases.iter().any(|l| {
-        l.address.as_deref() == Some(ip_val) && l.mac_address != current_mac
-    })
+    !existing_leases
+        .iter()
+        .any(|l| l.address.as_deref() == Some(ip_val) && l.mac_address != current_mac)
+}
+
+pub fn is_valid_mac(mac: &str) -> bool {
+    use std::sync::OnceLock;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"^([0-9A-Fa-f]{2}:){5}([0-9A-Fa-f]{2})$").unwrap());
+    re.is_match(mac)
+}
+
+pub fn is_valid_ipv4(
+    ip: &str,
+    network: &DhcpNetwork,
+    existing_leases: &[Lease],
+    current_mac: &str,
+) -> bool {
+    let ip_val = ip.trim();
+    if ip_val.is_empty() {
+        return false;
+    }
+
+    // 1. Format check
+    if ip_val.parse::<Ipv4Addr>().is_err() {
+        return false;
+    }
+
+    // 2. Range check
+    if !is_ip_in_range(ip_val, network) {
+        return false;
+    }
+
+    // 3. Uniqueness check
+    if !is_ip_unique(ip_val, existing_leases, current_mac) {
+        return false;
+    }
+
+    true
 }
 
 #[cfg(test)]
@@ -223,7 +262,7 @@ add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.16
     #[test]
     fn test_parse_all() {
         let data = parse_all(MIKROTIK_EXPORT);
-        
+
         assert_eq!(data.servers.len(), 3);
         assert_eq!(data.servers[0].name, "guest-dhcp");
         assert_eq!(data.servers[0].comment.as_deref(), Some("guest"));
@@ -241,7 +280,7 @@ add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.16
     fn test_match_server_network() {
         let data = parse_all(MIKROTIK_EXPORT);
         let corp_server = data.servers.iter().find(|s| s.name == "corp-dhcp").unwrap();
-        
+
         let matched = find_network_for_server(corp_server, &data.networks);
         assert!(matched.is_some());
         assert_eq!(matched.unwrap().address, "172.16.20.0/23");
@@ -249,7 +288,10 @@ add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.16
 
     #[test]
     fn test_ip_in_range() {
-        let net = DhcpNetwork { address: "172.16.20.0/23".into(), ..Default::default() };
+        let net = DhcpNetwork {
+            address: "172.16.20.0/23".into(),
+            ..Default::default()
+        };
         assert!(is_ip_in_range("172.16.20.5", &net));
         assert!(is_ip_in_range("172.16.21.254", &net));
         assert!(!is_ip_in_range("172.16.22.1", &net));
@@ -257,18 +299,82 @@ add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.16
 
     #[test]
     fn test_find_first_free_ip() {
-        let net = DhcpNetwork { 
-            address: "172.22.2.0/24".into(), 
+        let net = DhcpNetwork {
+            address: "172.22.2.0/24".into(),
             gateway: Some("172.22.2.1".into()),
-            ..Default::default() 
+            ..Default::default()
         };
         let existing = vec![
-            Lease { address: Some("172.22.2.2".to_string()), ..Default::default() },
-            Lease { address: Some("172.22.2.3".to_string()), ..Default::default() },
+            Lease {
+                address: Some("172.22.2.2".to_string()),
+                ..Default::default()
+            },
+            Lease {
+                address: Some("172.22.2.3".to_string()),
+                ..Default::default()
+            },
         ];
         // Should skip .0 (network), .1 (gateway), .2 (existing), .3 (existing)
         // So .4 should be free
         let free = find_first_free_ip(&net, &existing);
         assert_eq!(free.as_deref(), Some("172.22.2.4"));
+    }
+
+    #[test]
+    fn test_is_valid_mac() {
+        assert!(is_valid_mac("A4:C6:9A:08:86:C8"));
+        assert!(is_valid_mac("a4:c6:9a:08:86:c8"));
+        assert!(!is_valid_mac("A4:C6:9A:08:86:G8")); // Invalid char
+        assert!(!is_valid_mac("A4-C6-9A-08-86-C8")); // Wrong separator
+        assert!(!is_valid_mac("A4:C6:9A:08:86")); // Too short
+    }
+
+    #[test]
+    fn test_is_valid_ipv4() {
+        let net = DhcpNetwork {
+            address: "172.16.20.0/23".into(),
+            ..Default::default()
+        };
+        let existing = vec![Lease {
+            address: Some("172.16.20.10".to_string()),
+            mac_address: "AA:BB:CC:DD:EE:FF".to_string(),
+            ..Default::default()
+        }];
+
+        // Valid
+        assert!(is_valid_ipv4(
+            "172.16.20.50",
+            &net,
+            &existing,
+            "00:11:22:33:44:55"
+        ));
+        // Invalid format
+        assert!(!is_valid_ipv4(
+            "172.16.20.256",
+            &net,
+            &existing,
+            "00:11:22:33:44:55"
+        ));
+        // Out of range
+        assert!(!is_valid_ipv4(
+            "172.16.22.1",
+            &net,
+            &existing,
+            "00:11:22:33:44:55"
+        ));
+        // Not unique (another MAC already has this IP)
+        assert!(!is_valid_ipv4(
+            "172.16.20.10",
+            &net,
+            &existing,
+            "00:11:22:33:44:55"
+        ));
+        // Unique (same MAC - editing own lease)
+        assert!(is_valid_ipv4(
+            "172.16.20.10",
+            &net,
+            &existing,
+            "AA:BB:CC:DD:EE:FF"
+        ));
     }
 }
