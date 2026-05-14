@@ -2,9 +2,15 @@
 name = "whitelist_editor"
 version = "0.1.0"
 edition = "2024"
+authors = ["Volodymyr M. Lisivka <vlisivka@gmail.com>"]
+description = "Simple CRUD editor for Mikrotik static DHCP leases."
+license = "GPL-3.0-or-later"
+repository = "https://github.com/vlisivka/whitelist_editor"
+keywords = ["egui", "mikrotik"]
 
 [dependencies]
-eframe = { version = "0.34", features = ["persistence"] }
+eframe = { version = "0.34", features = ["persistence", "wgpu"] }
+wgpu = { version = "27", features = ["glsl", "angle"] }
 egui = {version = "0.34", features = ["serde"] }
 egui_extras = { version = "0.34" }
 ssh-rs = "0.4"
