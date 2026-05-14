@@ -1,0 +1,50 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="shadow" x="0" y="0" width="256" height="256" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#000000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  
+  <!-- Основний фон - синій квадрат -->
+  <rect x="0" y="0" width="256" height="256" rx="48" fill="#1A66AB" filter="url(#shadow)"/>
+  
+  <!-- Спрощений сірий корпус роутера (вид спереду) -->
+  <rect x="32" y="64" width="192" height="128" rx="16" fill="#A4A8B3"/>
+  <path d="M32 80H224L208 176H48L32 80Z" fill="#D9DBE1"/> <!-- Верхня грань під кутом -->
+  
+  <!-- П'ять Ethernet-портів (номеровані 1-5) -->
+  <g transform="translate(48, 144)">
+    <rect x="0" y="0" width="24" height="24" rx="4" fill="#3D4249"/>
+    <text x="12" y="18" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle">1</text>
+  </g>
+  <g transform="translate(80, 144)">
+    <rect x="0" y="0" width="24" height="24" rx="4" fill="#3D4249"/>
+    <text x="12" y="18" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle">2</text>
+  </g>
+  <g transform="translate(112, 144)">
+    <rect x="0" y="0" width="24" height="24" rx="4" fill="#3D4249"/>
+    <text x="12" y="18" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle">3</text>
+  </g>
+  <g transform="translate(144, 144)">
+    <rect x="0" y="0" width="24" height="24" rx="4" fill="#3D4249"/>
+    <text x="12" y="18" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle">4</text>
+  </g>
+  <g transform="translate(176, 144)">
+    <rect x="0" y="0" width="24" height="24" rx="4" fill="#3D4249"/>
+    <text x="12" y="18" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle">5</text>
+  </g>
+  
+  <!-- Спрощений логотип 'MikroTik' -->
+  <text x="36" y="186" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="white">MikroTik</text>
+  
+  <!-- Центральний жовтий символ "перехрестя маршрутизатора" -->
+  <circle cx="128" cy="112" r="32" fill="#FFC72C"/>
+  <path d="M128 88 L120 96 H136 Z M128 136 L136 128 H120 Z M152 112 L144 120 V104 Z M104 112 L112 104 V120 Z" fill="#4B5663"/>
+  
+  <!-- Спрощена іконка "книги" (CRUD DHCP) -->
+  <rect x="192" y="192" width="48" height="48" rx="8" fill="#FFD700"/> <!-- Обкладинка -->
+  <rect x="198" y="198" width="18" height="36" fill="white"/> <!-- Сторінки -->
+  <rect x="220" y="198" width="18" height="36" fill="white"/> <!-- Сторінки -->
+  <path d="M228 206 L224 210 L232 218 L240 210" stroke="black" stroke-width="2" fill="none"/> <!-- Пташка -->
+  <path d="M228 218 L224 222 L232 230 L240 222" stroke="black" stroke-width="2" fill="none"/> <!-- Пташка -->
+</svg>

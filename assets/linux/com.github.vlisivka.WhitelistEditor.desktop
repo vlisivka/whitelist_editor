@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Whitelist editor
+GenericName=DHCP leases editor
+Comment=Simple CRUD for DHCP leases on Mikrotik
+Comment[uk]=Простий редактор для статичних адрес DHCP на Mikrotik
+Exec=whitelist_editor
+Icon=com.github.vlisivka.WhitelistEditor
+Terminal=false
+StartupWMClass=com.github.vlisivka.WhitelistEditor
+Categories=Network;System;
+Keywords=network;mikrotik
