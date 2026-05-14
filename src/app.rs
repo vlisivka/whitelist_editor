@@ -1,6 +1,7 @@
 use crate::mikrotik_data::{
-    DhcpData, Lease, escape_mikrotik, filter_leases, find_first_free_ip, find_network_for_server,
-    is_ip_in_range, is_ip_unique, is_valid_ipv4, is_valid_mac, parse_all,
+    DhcpData, Lease, SortColumn, SortOrder, escape_mikrotik, filter_leases, find_first_free_ip,
+    find_network_for_server, is_ip_in_range, is_ip_unique, is_valid_ipv4, is_valid_mac, parse_all,
+    sort_leases,
 };
 use crate::ssh_client::{SSHClient, SSHConnector};
 use eframe::egui;
@@ -43,6 +44,10 @@ pub struct WhitelistApp {
     selected_tab: Tab,
     #[serde(skip)]
     search_query: String,
+    #[serde(skip)]
+    sort_column: Option<SortColumn>,
+    #[serde(skip)]
+    sort_order: SortOrder,
 }
 
 impl Default for WhitelistApp {
@@ -60,6 +65,8 @@ impl Default for WhitelistApp {
             is_adding: false,
             selected_tab: Tab::Editor,
             search_query: String::new(),
+            sort_column: None,
+            sort_order: SortOrder::default(),
         }
     }
 }
@@ -160,6 +167,25 @@ impl WhitelistApp {
             }
         }
     }
+
+    /// Оновлює стан сортування при кліку на заголовок стовпця.
+    /// 1-й клік: встановити стовпець + Asc
+    /// 2-й клік (той самий стовпець): Desc
+    /// 3-й клік (той самий стовпець): скидання (None + Asc)
+    fn toggle_sort(&mut self, col: SortColumn) {
+        if self.sort_column.as_ref() == Some(&col) {
+            match self.sort_order {
+                SortOrder::Asc => self.sort_order = SortOrder::Desc,
+                SortOrder::Desc => {
+                    self.sort_column = None;
+                    self.sort_order = SortOrder::Asc;
+                }
+            }
+        } else {
+            self.sort_column = Some(col);
+            self.sort_order = SortOrder::Asc;
+        }
+    }
 }
 
 fn generate_find_query(lease: &Lease) -> String {
@@ -195,6 +221,10 @@ impl eframe::App for WhitelistApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Збираємо клік у локальну змінну, щоб уникнути borrow-checker
+        // конфлікту (closure захоплює &self, toggle_sort потребує &mut self)
+        let mut clicked_col: Option<SortColumn> = None;
+
         egui::CentralPanel::default().show_inside(ui, |ui| {
         ui.vertical(|ui| {
             ui.add_space(5.0);
@@ -281,6 +311,11 @@ impl eframe::App for WhitelistApp {
                         egui::ScrollArea::horizontal().show(ui, |ui| {
                             let filtered: Vec<&Lease> =
                                 filter_leases(&self.data.leases, &self.search_query);
+                            let sorted: Vec<&Lease> = sort_leases(
+                                filtered,
+                                self.sort_column.as_ref(),
+                                &self.sort_order,
+                            );
 
                             let table = TableBuilder::new(ui)
                                 .id_salt("leases_table")
@@ -290,17 +325,15 @@ impl eframe::App for WhitelistApp {
                                 .column(Column::initial(30.0).at_least(30.0)) // №
                                 .column(Column::initial(60.0).at_least(60.0)) // Дії
                                 .column(Column::initial(40.0).at_least(40.0)) // Блок
-                                .column(Column::initial(100.0).at_least(100.0)) // IP
-                                .column(Column::initial(120.0).at_least(120.0)) // MAC
-                                .column(Column::initial(80.0).at_least(80.0)) // Сервер
+                                .column(Column::initial(110.0).at_least(100.0)) // IP
+                                .column(Column::initial(130.0).at_least(120.0)) // MAC
+                                .column(Column::initial(90.0).at_least(80.0)) // Сервер
                                 .column(Column::remainder()); // Коментар
 
                             let style_header = |ui: &mut egui::Ui, text: &str| {
-                                egui::Frame::NONE
-                                    .show(ui, |ui| {
-                                        ui.label(egui::RichText::new(text).heading()
-                                    );
-                                    });
+                                egui::Frame::NONE.show(ui, |ui| {
+                                    ui.label(egui::RichText::new(text).heading());
+                                });
                             };
 
                             table
@@ -314,23 +347,45 @@ impl eframe::App for WhitelistApp {
                                     header.col(|ui| {
                                         style_header(ui, "Блок");
                                     });
-                                    header.col(|ui| {
-                                        style_header(ui, "IP-адреса");
-                                    });
-                                    header.col(|ui| {
-                                        style_header(ui, "MAC-адреса");
-                                    });
-                                    header.col(|ui| {
-                                        style_header(ui, "Сервер");
-                                    });
-                                    header.col(|ui| {
-                                        style_header(ui, "Коментар");
-                                    });
+
+                                    // Клікабельні заголовки
+                                    for (label, col_variant) in [
+                                        ("IP-адреса", SortColumn::Ip),
+                                        ("MAC-адреса", SortColumn::Mac),
+                                        ("Сервер", SortColumn::Server),
+                                        ("Коментар", SortColumn::Comment),
+                                    ] {
+                                        header.col(|ui| {
+                                            let indicator =
+                                                if self.sort_column.as_ref() == Some(&col_variant) {
+                                                    if self.sort_order == SortOrder::Asc {
+                                                        " ↑"
+                                                    } else {
+                                                        " ↓"
+                                                    }
+                                                } else {
+                                                    ""
+                                                };
+                                            let text = format!("{}{}", label, indicator);
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new(text).heading(),
+                                                    )
+                                                    .frame(false),
+                                                )
+                                                .on_hover_text("Клік — сортування")
+                                                .clicked()
+                                            {
+                                                clicked_col = Some(col_variant);
+                                            }
+                                        });
+                                    }
                                 })
                                 .body(|body| {
-                                    body.rows(28.0, filtered.len(), |mut row| {
+                                    body.rows(28.0, sorted.len(), |mut row| {
                                         let row_index = row.index();
-                                        let lease = filtered[row_index].clone();
+                                        let lease = sorted[row_index].clone();
 
                                         row.col(|ui| {
                                             ui.label(row_index.to_string());
@@ -369,6 +424,10 @@ impl eframe::App for WhitelistApp {
                                     });
                                 });
                         });
+                        // Викликаємо після ScrollArea — borrow-checker не заперечує
+                        if let Some(col) = clicked_col {
+                            self.toggle_sort(col);
+                        }
                     } else if self.client.is_some() {
                         ui.label("Не завантажено адреси або не знайдено адрес.");
                     }
@@ -753,5 +812,56 @@ add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.16
 
         app.selected_tab = Tab::Instructions;
         assert_eq!(app.selected_tab, Tab::Instructions);
+    }
+
+    #[test]
+    fn test_sort_initial_state() {
+        let app = WhitelistApp::default();
+        assert_eq!(
+            app.sort_column, None,
+            "Сортування має бути відсутнє за замовчуванням"
+        );
+        assert_eq!(
+            app.sort_order,
+            SortOrder::Asc,
+            "Порядок за замовчуванням — Asc"
+        );
+    }
+
+    #[test]
+    fn test_toggle_sort_first_click() {
+        let mut app = WhitelistApp::default();
+        app.toggle_sort(SortColumn::Ip);
+        assert_eq!(app.sort_column, Some(SortColumn::Ip));
+        assert_eq!(app.sort_order, SortOrder::Asc);
+    }
+
+    #[test]
+    fn test_toggle_sort_second_click_reverses_order() {
+        let mut app = WhitelistApp::default();
+        app.toggle_sort(SortColumn::Ip);
+        app.toggle_sort(SortColumn::Ip);
+        assert_eq!(app.sort_column, Some(SortColumn::Ip));
+        assert_eq!(app.sort_order, SortOrder::Desc);
+    }
+
+    #[test]
+    fn test_toggle_sort_third_click_resets() {
+        let mut app = WhitelistApp::default();
+        app.toggle_sort(SortColumn::Ip);
+        app.toggle_sort(SortColumn::Ip);
+        app.toggle_sort(SortColumn::Ip);
+        assert_eq!(app.sort_column, None, "Третій клік — скидання");
+        assert_eq!(app.sort_order, SortOrder::Asc);
+    }
+
+    #[test]
+    fn test_toggle_sort_different_column_resets_order() {
+        let mut app = WhitelistApp::default();
+        app.toggle_sort(SortColumn::Ip);
+        app.toggle_sort(SortColumn::Ip); // -> Desc
+        app.toggle_sort(SortColumn::Mac); // Новий стовпець -> Asc
+        assert_eq!(app.sort_column, Some(SortColumn::Mac));
+        assert_eq!(app.sort_order, SortOrder::Asc);
     }
 }

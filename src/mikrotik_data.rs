@@ -351,6 +351,74 @@ pub fn is_valid_ipv4(
     true
 }
 
+/// Стовпець, по якому виконується сортування таблиці лізів.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SortColumn {
+    Ip,
+    Mac,
+    Server,
+    Comment,
+}
+
+/// Порядок сортування.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum SortOrder {
+    #[default]
+    Asc,
+    Desc,
+}
+
+/// Сортує `leases` за заданим стовпцем та порядком.
+/// Якщо `column` — `None`, повертає вхідний список без змін.
+/// `None`-значення полів (comment, address) розміщуються в кінці при Asc
+/// та на початку при Desc.
+pub fn sort_leases<'a>(
+    leases: Vec<&'a Lease>,
+    column: Option<&SortColumn>,
+    order: &SortOrder,
+) -> Vec<&'a Lease> {
+    let Some(col) = column else {
+        return leases;
+    };
+
+    let mut sorted = leases;
+    sorted.sort_by(|a, b| {
+        let cmp = match col {
+            SortColumn::Ip => {
+                // Числове сортування: 10.0.0.9 < 10.0.0.10
+                let a_ip: Option<Ipv4Addr> = a.address.as_deref().and_then(|s| s.parse().ok());
+                let b_ip: Option<Ipv4Addr> = b.address.as_deref().and_then(|s| s.parse().ok());
+                match (a_ip, b_ip) {
+                    (Some(a), Some(b)) => u32::from(a).cmp(&u32::from(b)),
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            }
+            SortColumn::Mac => a
+                .mac_address
+                .to_lowercase()
+                .cmp(&b.mac_address.to_lowercase()),
+            SortColumn::Server => a.server.to_lowercase().cmp(&b.server.to_lowercase()),
+            SortColumn::Comment => {
+                let a_c = a.comment.as_deref().unwrap_or("");
+                let b_c = b.comment.as_deref().unwrap_or("");
+                match (a.comment.is_some(), b.comment.is_some()) {
+                    (false, true) => std::cmp::Ordering::Greater,
+                    (true, false) => std::cmp::Ordering::Less,
+                    _ => a_c.to_lowercase().cmp(&b_c.to_lowercase()),
+                }
+            }
+        };
+        if *order == SortOrder::Desc {
+            cmp.reverse()
+        } else {
+            cmp
+        }
+    });
+    sorted
+}
+
 /// Повертає підмножину лізів, у яких хоча б одне поле
 /// містить рядок `query` (нечутливо до регістру).
 /// Порожній `query` → повертає всі ліза.
@@ -362,10 +430,18 @@ pub fn filter_leases<'a>(leases: &'a [Lease], query: &str) -> Vec<&'a Lease> {
     leases
         .iter()
         .filter(|l| {
-            l.address.as_deref().unwrap_or("").to_lowercase().contains(&q)
+            l.address
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains(&q)
                 || l.mac_address.to_lowercase().contains(&q)
                 || l.server.to_lowercase().contains(&q)
-                || l.comment.as_deref().unwrap_or("").to_lowercase().contains(&q)
+                || l.comment
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains(&q)
         })
         .collect()
 }
@@ -605,7 +681,10 @@ add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.16
     fn test_filter_leases_no_match() {
         let leases = make_leases();
         let result = filter_leases(&leases, "xxxxxxx");
-        assert!(result.is_empty(), "Немає збігів — має повертати порожній вектор");
+        assert!(
+            result.is_empty(),
+            "Немає збігів — має повертати порожній вектор"
+        );
     }
 
     #[test]
@@ -615,5 +694,67 @@ add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.16
         let result = filter_leases(&leases, "SYN");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].comment.as_deref(), Some("029SYN"));
+    }
+
+    // --- sort_leases ---
+
+    #[test]
+    fn test_sort_leases_no_sort() {
+        let leases = make_leases();
+        let refs: Vec<&Lease> = leases.iter().collect();
+        let result = sort_leases(refs, None, &SortOrder::Asc);
+        // Порядок має залишитися незмінним
+        assert_eq!(result[0].address.as_deref(), Some("172.16.20.217"));
+        assert_eq!(result[1].address.as_deref(), Some("172.22.2.29"));
+    }
+
+    #[test]
+    fn test_sort_leases_by_ip_asc() {
+        let leases = make_leases();
+        let refs: Vec<&Lease> = leases.iter().collect();
+        let result = sort_leases(refs, Some(&SortColumn::Ip), &SortOrder::Asc);
+        // 172.16.20.217 < 172.22.2.29 числово
+        assert_eq!(result[0].address.as_deref(), Some("172.16.20.217"));
+        assert_eq!(result[1].address.as_deref(), Some("172.22.2.29"));
+    }
+
+    #[test]
+    fn test_sort_leases_by_ip_desc() {
+        let leases = make_leases();
+        let refs: Vec<&Lease> = leases.iter().collect();
+        let result = sort_leases(refs, Some(&SortColumn::Ip), &SortOrder::Desc);
+        // Спадання: 172.22.x перший
+        assert_eq!(result[0].address.as_deref(), Some("172.22.2.29"));
+        assert_eq!(result[1].address.as_deref(), Some("172.16.20.217"));
+    }
+
+    #[test]
+    fn test_sort_leases_by_mac_asc() {
+        let leases = make_leases();
+        let refs: Vec<&Lease> = leases.iter().collect();
+        let result = sort_leases(refs, Some(&SortColumn::Mac), &SortOrder::Asc);
+        // "A4:..." < "F4:..." лексикографічно
+        assert_eq!(result[0].mac_address, "A4:C6:9A:08:86:C8");
+        assert_eq!(result[1].mac_address, "F4:1E:57:7F:D1:57");
+    }
+
+    #[test]
+    fn test_sort_leases_by_server_asc() {
+        let leases = make_leases();
+        let refs: Vec<&Lease> = leases.iter().collect();
+        let result = sort_leases(refs, Some(&SortColumn::Server), &SortOrder::Asc);
+        // "corp-dhcp" < "mng-server"
+        assert_eq!(result[0].server, "corp-dhcp");
+        assert_eq!(result[1].server, "mng-server");
+    }
+
+    #[test]
+    fn test_sort_leases_by_comment_asc() {
+        let leases = make_leases();
+        let refs: Vec<&Lease> = leases.iter().collect();
+        let result = sort_leases(refs, Some(&SortColumn::Comment), &SortOrder::Asc);
+        // Lease з comment=Some("029SYN") < Lease з comment=None (None — в кінці)
+        assert_eq!(result[0].comment.as_deref(), Some("029SYN"));
+        assert!(result[1].comment.is_none());
     }
 }

@@ -1,190 +1,221 @@
-# План: Поле пошуку для таблиці лізів
+
+# План: Сортування по стовпцях таблиці лізів
 
 ## Опис задачі
 
-Додати рядок пошуку над таблицею лізів, який фільтрує відображені рядки за збігом
-хоча б в одному полі: IP-адреса, MAC-адреса, сервер, коментар. Поруч із полем пошуку
-розмістити кнопку «✕» для швидкого скидання пошукового запиту.
-Методологія — TDD: спочатку тести, потім реалізація.
+Додати інтерактивне сортування таблиці лізів по стовпцях — IP-адреса, MAC-адреса, Сервер, Коментар. Клік на заголовок стовпця встановлює сортування по цьому стовпцю. Повторний клік — змінює порядок (зростання / спадання). Третій клік — скидає сортування (повертає оригінальний порядок).
 
----
+Методологія — TDD: спочатку тести, потім реалізація.
 
 ## Запитання перед початком
 
-1. **Чутливість до регістру.** Пошук планується **нечутливим** до регістру
-   (`"syn"` знаходить `"029SYN"`). Підтвердьте або вкажіть інше.
-   Відповідь: так, пошук нечутливий до регістру.
+Які стовпці підлягають сортуванню? Запропонований варіант: IP-адреса, MAC-адреса, Сервер, Коментар. Стовпці «№», «Дії», «Блок» — без сортування. Підтвердьте або вкажіть інше.
+Підтверджую.
 
-2. **Розміщення рядка пошуку.** Варіанти:
-   - **А** — між рядком кнопок («Оновити», «Додати адресу») і таблицею *(рекомендовано)*
-   - **Б** — в одному горизонтальному рядку з кнопками
-   Відповідь: варіант А.
+Скидання сортування. При третьому кліку повернути оригінальний порядок (порядок, в якому дані прийшли з роутера).
 
-3. **Лічильник знайдених записів.** Чи потрібно показувати, наприклад,
-   `"Знайдено: 3 / 25"` при активному пошуку? Якщо так — де саме
-   (у рядку статусу чи поруч із полем пошуку)?
-   Відповідь: ні лічильник не потрібен.
+Взаємодія з пошуком. Сортування має застосовуватись після фільтрації (тобто відсортований список — відфільтровані результати).
 
----
+Збереження стану між сесіями. Чи потрібно зберігати обраний стовпець та порядок сортування між перезапусками програми (serde + eframe::Storage)? Пропозиція: ні, скидати до None при кожному запуску.
+
+## Аналіз поточного коду
+
+Актуальний pipeline (app.rs, рядки 282-370)
+
+self.data.leases -> filter_leases(...) -> filtered: Vec<&Lease> -> рендер
+
+Після завдання pipeline стане:
+
+self.data.leases -> filter_leases(...) -> sort_leases(...) -> sorted: Vec<&Lease> -> рендер
+
+### Що вже є у mikrotik_data.rs
+
+Структура Lease (поля address, mac_address, server, comment)
+Функція filter_leases — повертає Vec<&Lease>
+
+### Що потрібно додати
+
+| Де | Що |
+| mikrotik_data.rs | SortColumn, SortOrder, sort_leases |
+| app.rs | Поля sort_column, sort_order; метод toggle_sort; клікабельні заголовки |
 
 ## Запропоновані зміни
 
-### Крок 1 — Тести (TDD: написати тести, що падають)
+### Крок 1 — Тести для sort_leases (TDD, мають ВПАСТИ)
+Файл: src/mikrotik_data.rs
 
-**Файл:** `src/mikrotik_data.rs`
+Назва тесту	Сценарій
 
-Додати тести до блоку `#[cfg(test)]` для нової функції `filter_leases`:
+test_sort_leases_by_ip_asc	IP зростання: 172.16.x < 172.22.x
+test_sort_leases_by_ip_desc	IP спадання: зворотній порядок
+test_sort_leases_by_mac_asc	MAC зростання (лексикографічно)
+test_sort_leases_by_server_asc	Сервер зростання
+test_sort_leases_by_comment_asc	Коментар зростання; None — в кінці
+test_sort_leases_no_sort	column = None — порядок незмінний
 
-| Назва тесту | Сценарій |
-|---|---|
-| `test_filter_leases_empty_query` | Порожній запит → повертає всі записи |
-| `test_filter_leases_by_ip` | Пошук за частиною IP (`"172.22"`) |
-| `test_filter_leases_by_mac` | Пошук за MAC-адресою |
-| `test_filter_leases_by_server` | Пошук за назвою сервера |
-| `test_filter_leases_by_comment` | Пошук за коментарем |
-| `test_filter_leases_no_match` | Немає збігів → порожній вектор |
-| `test_filter_leases_case_insensitive` | `"SYN"` знаходить `"029SYN"` |
-
----
-
-### Крок 2 — Реалізація `filter_leases` в `mikrotik_data.rs`
-
-Додати публічну чисту функцію перед блоком `#[cfg(test)]`:
+### Крок 2 — SortColumn, SortOrder, sort_leases в mikrotik_data.rs
 
 ```rust
-/// Повертає підмножину лізів, у яких хоча б одне поле
-/// містить рядок `query` (нечутливо до регістру).
-/// Порожній `query` → повертає всі ліза.
-pub fn filter_leases<'a>(leases: &'a [Lease], query: &str) -> Vec<&'a Lease> {
-    let q = query.trim().to_lowercase();
-    if q.is_empty() {
-        return leases.iter().collect();
-    }
-    leases
-        .iter()
-        .filter(|l| {
-            l.address.as_deref().unwrap_or("").to_lowercase().contains(&q)
-                || l.mac_address.to_lowercase().contains(&q)
-                || l.server.to_lowercase().contains(&q)
-                || l.comment.as_deref().unwrap_or("").to_lowercase().contains(&q)
-        })
-        .collect()
+#[derive(Debug, Clone, PartialEq)]
+pub enum SortColumn { Ip, Mac, Server, Comment }
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum SortOrder { #[default] Asc, Desc }
+pub fn sort_leases<'a>(
+    leases: Vec<&'a Lease>,
+    column: Option<&SortColumn>,
+    order: &SortOrder,
+) -> Vec<&'a Lease> {
+    let Some(col) = column else { return leases; };
+    let mut sorted = leases;
+    sorted.sort_by(|a, b| {
+        let cmp = match col {
+            SortColumn::Ip => {
+                let a_ip: Option<std::net::Ipv4Addr> =
+                    a.address.as_deref().and_then(|s| s.parse().ok());
+                let b_ip: Option<std::net::Ipv4Addr> =
+                    b.address.as_deref().and_then(|s| s.parse().ok());
+                match (a_ip, b_ip) {
+                    (Some(a), Some(b)) => u32::from(a).cmp(&u32::from(b)),
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            }
+            SortColumn::Mac => a.mac_address.to_lowercase().cmp(&b.mac_address.to_lowercase()),
+            SortColumn::Server => a.server.to_lowercase().cmp(&b.server.to_lowercase()),
+            SortColumn::Comment => {
+                match (a.comment.is_some(), b.comment.is_some()) {
+                    (false, true) => std::cmp::Ordering::Greater,
+                    (true, false) => std::cmp::Ordering::Less,
+                    _ => a.comment.as_deref().unwrap_or("").to_lowercase()
+                             .cmp(&b.comment.as_deref().unwrap_or("").to_lowercase()),
+                }
+            }
+        };
+        if *order == SortOrder::Desc { cmp.reverse() } else { cmp }
+    });
+    sorted
 }
 ```
 
-Перевіряються поля: `address`, `mac_address`, `server`, `comment`.
+IP-сортування числове (через Ipv4Addr -> u32): 10.0.0.9 < 10.0.0.10.
 
----
+### Крок 3 — Стан UI в app.rs
 
-### Крок 3 — Стан UI в `app.rs`
+Імпорт:
 
-**3а. Імпорт функції** (у рядку `use crate::mikrotik_data::{...}`):
 ```rust
-filter_leases,
+sort_leases, SortColumn, SortOrder,
 ```
 
-**3б. Нове поле** у структурі `WhitelistApp`:
+Нові поля у WhitelistApp:
+
 ```rust
 #[serde(skip)]
-search_query: String,
+sort_column: Option<SortColumn>,
+#[serde(skip)]
+sort_order: SortOrder,
 ```
 
-**3в. Ініціалізація** у `Default::default()`:
+Ініціалізація у Default:
+
 ```rust
-search_query: String::new(),
+sort_column: None,
+sort_order: SortOrder::default(),
 ```
 
----
-
-### Крок 4 — UI: рядок пошуку в `app.rs`
-
-Між рядком кнопок і таблицею додати горизонтальний блок:
+### Крок 4 — Метод toggle_sort в app.rs
 
 ```rust
-// Рядок пошуку
-ui.horizontal(|ui| {
-    ui.label("🔍 Пошук:");
-    ui.add(
-        egui::TextEdit::singleline(&mut self.search_query)
-            .hint_text("IP, MAC, сервер, коментар...")
-            .desired_width(300.0),
-    );
-    if ui.button("✕").on_hover_text("Скинути пошук").clicked() {
-        self.search_query.clear();
+fn toggle_sort(&mut self, col: SortColumn) {
+    if self.sort_column.as_ref() == Some(&col) {
+        match self.sort_order {
+            SortOrder::Asc  => self.sort_order = SortOrder::Desc,
+            SortOrder::Desc => {
+                self.sort_column = None;        // 3-й клік — скидання
+                self.sort_order  = SortOrder::Asc;
+            }
+        }
+    } else {
+        self.sort_column = Some(col);
+        self.sort_order  = SortOrder::Asc;
     }
-});
-ui.add_space(5.0);
+}
 ```
 
----
+### Крок 5 — UI: клікабельні заголовки в app.rs
 
-### Крок 5 — Фільтрація у тілі таблиці в `app.rs`
+Замінити style_header closure на sort_header, що показує ↑/↓ та повертає натиснуту колонку.
 
-Перед рендерингом таблиці обчислити відфільтрований список:
+Щоб уникнути конфлікту borrow-checker (closure бере &self, а toggle_sort потребує &mut self), заголовки фіксують клік у локальній змінній, а виклик toggle_sort відбувається після блоку .header(...).
+
+```rust
+let mut clicked_col: Option<SortColumn> = None;
+table.header(28.0, |mut header| {
+    // №, Дії, Блок — без сортування
+    header.col(|ui| { /* style незмінний */ });
+    header.col(|ui| { /* style незмінний */ });
+    header.col(|ui| { /* style незмінний */ });
+    // Клікабельні стовпці
+    for (label, col_val) in [
+        ("IP-адреса",  SortColumn::Ip),
+        ("MAC-адреса", SortColumn::Mac),
+        ("Сервер",     SortColumn::Server),
+        ("Коментар",   SortColumn::Comment),
+    ] {
+        header.col(|ui| {
+            let indicator = if self.sort_column.as_ref() == Some(&col_val) {
+                if self.sort_order == SortOrder::Asc { " ↑" } else { " ↓" }
+            } else { "" };
+            if ui.add(
+                egui::Button::new(egui::RichText::new(
+                    format!("{}{}", label, indicator)).heading())
+                    .frame(false)
+            ).clicked() {
+                clicked_col = Some(col_val);
+            }
+        });
+    }
+})
+.body(|body| { /* без змін */ });
+if let Some(col) = clicked_col {
+    self.toggle_sort(col);
+}
+```
+
+### Крок 6 — Pipeline в app.rs
 
 ```rust
 let filtered: Vec<&Lease> = filter_leases(&self.data.leases, &self.search_query);
+let sorted:   Vec<&Lease> = sort_leases(filtered, self.sort_column.as_ref(), &self.sort_order);
+// Далі body.rows використовує sorted замість filtered
 ```
 
-Замінити у `body.rows(...)`:
-- `self.data.leases.len()` → `filtered.len()`
-- `self.data.leases[row_index].clone()` → `filtered[row_index].clone()`
-
-> Нумерація рядків `№` буде за порядком у відфільтрованому списку.
-> Якщо потрібна глобальна нумерація (з оригінального списку) — уточніть.
-
----
-
-### Крок 6 — Тести для UI в `app.rs`
-
-Додати до блоку `#[cfg(test)]`:
+### Крок 7 — Тести toggle_sort в app.rs
 
 ```rust
 #[test]
-fn test_search_query_initial_state() {
-    let app = WhitelistApp::default();
-    assert_eq!(app.search_query, "");
-}
-
+fn test_toggle_sort_first_click() { /* sort_column=Ip, order=Asc */ }
 #[test]
-fn test_filter_applied_to_leases() {
-    let mut app = WhitelistApp::default();
-    let mut responses = HashMap::new();
-    responses.insert(
-        "/ip/dhcp-server/export".to_string(),
-        MIKROTIK_EXPORT.to_string(),
-    );
-    app.client = Some(Box::new(MockSSHClient { responses }));
-    app.refresh_data();
-
-    app.search_query = "corp-dhcp".to_string();
-    let filtered = filter_leases(&app.data.leases, &app.search_query);
-    assert_eq!(filtered.len(), 1);
-    assert_eq!(filtered[0].server, "corp-dhcp");
-}
+fn test_toggle_sort_second_click_reverses_order() { /* order=Desc */ }
+#[test]
+fn test_toggle_sort_third_click_resets() { /* sort_column=None, order=Asc */ }
+#[test]
+fn test_toggle_sort_different_column_resets_order() { /* Mac, Asc */ }
 ```
-
----
 
 ## Порядок виконання
 
-```
-1. Написати тести в mikrotik_data.rs  →  cargo test (має ВПАСТИ)
-2. Реалізувати filter_leases           →  cargo test (має пройти)
-3. Додати поле search_query в app.rs
-4. Додати UI рядка пошуку
-5. Підключити filter_leases до таблиці
-6. Написати тести в app.rs             →  cargo test (має пройти)
-7. Фінальний cargo test (всі тести зелені)
-```
-
----
+1. Тести sort_leases в mikrotik_data.rs  ->  cargo test (ВПАСТИ)
+2. Реалізувати SortColumn/SortOrder/sort_leases  ->  cargo test (пройти)
+3. Поля + toggle_sort в app.rs
+4. Тести toggle_sort  ->  cargo test (пройти)
+5. UI: клікабельні заголовки + pipeline
+6. Фінальний cargo test (всі зелені)
 
 ## Обсяг змін
 
-| Файл | Що змінюється |
-|---|---|
-| `src/mikrotik_data.rs` | +1 публічна функція `filter_leases` + 7 тестів |
-| `src/app.rs` | +1 поле `search_query`, UI рядка пошуку, підключення фільтра до таблиці, +2 тести |
-
-Файли `ssh_client.rs`, `main.rs`, `Cargo.toml` — **без змін**.
+Файл	Що змінюється
+src/mikrotik_data.rs	+SortColumn, SortOrder, sort_leases, 6 тестів
+src/app.rs	+2 поля, toggle_sort, заголовки, pipeline, 4 тести
+ssh_client.rs, main.rs, Cargo.toml — без змін.
