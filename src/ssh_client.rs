@@ -12,7 +12,7 @@ pub struct SSHClient {
 
 impl SSHConnector for SSHClient {
     fn execute(&mut self, command: &str) -> Result<String> {
-        dbg!(&command);
+        //dbg!(&command);
 
         let exec = self
             .session
@@ -25,7 +25,7 @@ impl SSHConnector for SSHClient {
         let result =
             String::from_utf8(output).map_err(|e| anyhow!("Invalid UTF-8 output: {}", e))?;
 
-        dbg!(&result);
+        //dbg!(&result);
 
         Ok(result)
     }

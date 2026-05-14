@@ -192,11 +192,21 @@ impl eframe::App for WhitelistApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
         ui.vertical(|ui| {
             ui.add_space(5.0);
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.selected_tab, Tab::Editor, "📋 Список адрес");
                 ui.selectable_value(&mut self.selected_tab, Tab::Instructions, "ℹ️ Як знайти MAC");
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let mut theme = ui.ctx().options(|o| o.theme_preference);
+                    let old_theme = theme;
+                    theme.radio_buttons(ui);
+                    if theme != old_theme {
+                        ui.ctx().options_mut(|o| o.theme_preference = theme);
+                    }
+                });
             });
             ui.separator();
             ui.add_space(5.0);
@@ -263,15 +273,11 @@ impl eframe::App for WhitelistApp {
                                 .column(Column::initial(80.0).at_least(80.0)) // Сервер
                                 .column(Column::remainder()); // Коментар
 
-                            let header_bg = egui::Color32::from_gray(220);
-                            let header_text = egui::Color32::BLACK;
                             let style_header = |ui: &mut egui::Ui, text: &str| {
                                 egui::Frame::NONE
-                                    .fill(header_bg)
-                                    .corner_radius(2.0)
-                                    .inner_margin(egui::Margin::symmetric(4, 2))
                                     .show(ui, |ui| {
-                                        ui.label(egui::RichText::new(text).heading().color(header_text));
+                                        ui.label(egui::RichText::new(text).heading()
+                                    );
                                     });
                             };
 
@@ -640,6 +646,7 @@ impl eframe::App for WhitelistApp {
                 self.deleting_lease = Some(lease);
             }
         }
+    });
     }
 }
 
