@@ -39,7 +39,7 @@ pub fn parse_all(input: &str) -> DhcpData {
     let normalized = input.replace("\\\n", "").replace("\\\r\n", "");
     let mut current_section = "";
 
-    let re_kv = Regex::new(r#"(?P<key>[\w-]+)=\s*(?P<val>"[^"]*"|\S+)"#).unwrap();
+    let re_kv = Regex::new(r#"(?P<key>[\w-]+)=\s*(?P<val>"(?:[^"\\]|\\.)*"|\S+)"#).unwrap();
 
     for line in normalized.lines() {
         let trimmed = line.trim();
@@ -70,6 +70,9 @@ pub fn parse_all(input: &str) -> DhcpData {
                         let mut val = cap["val"].to_string();
                         if val.starts_with('"') && val.ends_with('"') {
                             val = val[1..val.len() - 1].to_string();
+                            val = unescape_mikrotik(&val);
+                        } else if val.contains('\\') {
+                            val = unescape_mikrotik(&val);
                         }
                         match key {
                             "name" => s.name = val,
@@ -89,6 +92,9 @@ pub fn parse_all(input: &str) -> DhcpData {
                         let mut val = cap["val"].to_string();
                         if val.starts_with('"') && val.ends_with('"') {
                             val = val[1..val.len() - 1].to_string();
+                            val = unescape_mikrotik(&val);
+                        } else if val.contains('\\') {
+                            val = unescape_mikrotik(&val);
                         }
                         match key {
                             "address" => l.address = Some(val),
@@ -114,6 +120,9 @@ pub fn parse_all(input: &str) -> DhcpData {
                         let mut val = cap["val"].to_string();
                         if val.starts_with('"') && val.ends_with('"') {
                             val = val[1..val.len() - 1].to_string();
+                            val = unescape_mikrotik(&val);
+                        } else if val.contains('\\') {
+                            val = unescape_mikrotik(&val);
                         }
                         match key {
                             "address" => n.address = val,
@@ -209,6 +218,108 @@ pub fn is_valid_mac(mac: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"^([0-9A-Fa-f]{2}:){5}([0-9A-Fa-f]{2})$").unwrap());
     re.is_match(mac)
+}
+
+pub fn unescape_mikrotik(input: &str) -> String {
+    let mut result = Vec::new();
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(&next) = chars.peek() {
+                match next {
+                    '\\' | '\"' | '\'' | '?' | '$' | '_' => {
+                        let mapped = match next {
+                            '_' => ' ',
+                            _ => next,
+                        };
+                        result.extend_from_slice(mapped.to_string().as_bytes());
+                        chars.next();
+                    }
+                    'n' => {
+                        result.push(b'\n');
+                        chars.next();
+                    }
+                    'r' => {
+                        result.push(b'\r');
+                        chars.next();
+                    }
+                    't' => {
+                        result.push(b'\t');
+                        chars.next();
+                    }
+                    'a' => {
+                        result.push(0x07);
+                        chars.next();
+                    }
+                    'b' => {
+                        result.push(0x08);
+                        chars.next();
+                    }
+                    'f' => {
+                        result.push(0x0c);
+                        chars.next();
+                    }
+                    'v' => {
+                        result.push(0x0b);
+                        chars.next();
+                    }
+                    _ if next.is_ascii_hexdigit() => {
+                        // Hex escape \HH
+                        let h1 = chars.next().unwrap();
+                        if let Some(&h2) = chars.peek() {
+                            if h2.is_ascii_hexdigit() {
+                                chars.next();
+                                let hex = format!("{}{}", h1, h2);
+                                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                                    result.push(byte);
+                                }
+                            } else {
+                                // Just one digit? MikroTik usually uses 2.
+                                // If not 2 digits, we might just treat it as literal or error.
+                                // But let's assume 2 digits.
+                            }
+                        }
+                    }
+                    _ => {
+                        // Unknown escape, keep backslash?
+                        result.push(b'\\');
+                    }
+                }
+            } else {
+                result.push(b'\\');
+            }
+        } else {
+            result.extend_from_slice(c.to_string().as_bytes());
+        }
+    }
+
+    String::from_utf8_lossy(&result).into_owned()
+}
+
+pub fn escape_mikrotik(input: &str) -> String {
+    let mut result = String::from("\"");
+    for c in input.chars() {
+        match c {
+            '\\' => result.push_str("\\\\"),
+            '\"' => result.push_str("\\\""),
+            '$' => result.push_str("\\$"),
+            '?' => result.push_str("\\?"),
+            '\n' => result.push_str("\\n"),
+            '\r' => result.push_str("\\r"),
+            '\t' => result.push_str("\\t"),
+            _ if c.is_ascii() && !c.is_ascii_control() => result.push(c),
+            _ => {
+                // Unicode or control char -> hex escapes
+                let mut buf = [0; 4];
+                for &byte in c.encode_utf8(&mut buf).as_bytes() {
+                    result.push_str(&format!("\\{:02X}", byte));
+                }
+            }
+        }
+    }
+    result.push('\"');
+    result
 }
 
 pub fn is_valid_ipv4(
@@ -375,5 +486,21 @@ add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.16
             &existing,
             "AA:BB:CC:DD:EE:FF"
         ));
+    }
+
+    #[test]
+    fn test_unescape_mikrotik() {
+        assert_eq!(super::unescape_mikrotik(r#"\"Hello world\""#), r#""Hello world""#);
+        assert_eq!(super::unescape_mikrotik(r#"Hello\_world"#), "Hello world");
+        assert_eq!(super::unescape_mikrotik(r#"\D0\B0\D0\B1\D1\82"#), "абт");
+        assert_eq!(super::unescape_mikrotik(r#"\?\$"#), "?$");
+        assert_eq!(super::unescape_mikrotik(r#"a\nb"#), "a\nb");
+    }
+
+    #[test]
+    fn test_escape_mikrotik() {
+        assert_eq!(super::escape_mikrotik("Привіт"), r#""\D0\9F\D1\80\D0\B8\D0\B2\D1\96\D1\82""#);
+        assert_eq!(super::escape_mikrotik(r#"Path with "quotes""#), r#""Path with \"quotes\"""#);
+        assert_eq!(super::escape_mikrotik("simple"), r#""simple""#);
     }
 }

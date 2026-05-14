@@ -1,6 +1,6 @@
 use crate::mikrotik_data::{
     DhcpData, Lease, find_first_free_ip, find_network_for_server, is_ip_in_range, is_ip_unique,
-    is_valid_ipv4, is_valid_mac, parse_all,
+    is_valid_ipv4, is_valid_mac, parse_all, escape_mikrotik,
 };
 use crate::ssh_client::{SSHClient, SSHConnector};
 use eframe::egui;
@@ -105,26 +105,26 @@ impl WhitelistApp {
         if let Some(client) = &mut self.client {
             let cmd = if is_new {
                 format!(
-                    "/ip/dhcp-server/lease/add address={} mac-address={} server={} comment=\"{}\" block-access={}",
-                    lease.address.unwrap_or("0.0.0.0".to_owned()),
-                    lease.mac_address,
-                    lease.server,
-                    lease.comment.unwrap_or_default(),
+                    "/ip/dhcp-server/lease/add address={} mac-address={} server={} comment={} block-access={}",
+                    escape_mikrotik(lease.address.as_deref().unwrap_or("0.0.0.0")),
+                    escape_mikrotik(&lease.mac_address),
+                    escape_mikrotik(&lease.server),
+                    escape_mikrotik(lease.comment.as_deref().unwrap_or("")),
                     if lease.block_access { "yes" } else { "no" }
                 )
             } else {
                 let find_query = if let Some(original) = &self.original_lease {
                     generate_find_query(original)
                 } else {
-                    format!("[find mac-address=\"{}\"]", lease.mac_address)
+                    format!("[find mac-address={}]", escape_mikrotik(&lease.mac_address))
                 };
 
                 format!(
-                    "/ip/dhcp-server/lease/set {} address={} server={} comment=\"{}\" block-access={}",
+                    "/ip/dhcp-server/lease/set {} address={} server={} comment={} block-access={}",
                     find_query,
-                    lease.address.unwrap_or("0.0.0.0".to_owned()),
-                    lease.server,
-                    lease.comment.unwrap_or_default(),
+                    escape_mikrotik(lease.address.as_deref().unwrap_or("0.0.0.0")),
+                    escape_mikrotik(&lease.server),
+                    escape_mikrotik(lease.comment.as_deref().unwrap_or("")),
                     if lease.block_access { "yes" } else { "no" }
                 )
             };
@@ -160,16 +160,16 @@ impl WhitelistApp {
 }
 
 fn generate_find_query(lease: &Lease) -> String {
-    let mut parts = vec![format!("mac-address=\"{}\"", lease.mac_address)];
+    let mut parts = vec![format!("mac-address={}", escape_mikrotik(&lease.mac_address))];
 
     if let Some(addr) = lease.address.as_ref().filter(|a| !a.is_empty()) {
-        parts.push(format!("address=\"{}\"", addr));
+        parts.push(format!("address={}", escape_mikrotik(addr)));
     }
 
-    parts.push(format!("server=\"{}\"", lease.server));
+    parts.push(format!("server={}", escape_mikrotik(&lease.server)));
 
     if let Some(comment) = lease.comment.as_ref().filter(|c| !c.is_empty()) {
-        parts.push(format!("comment=\"{}\"", comment));
+        parts.push(format!("comment={}", escape_mikrotik(comment)));
     }
 
     parts.push(format!(
@@ -178,7 +178,7 @@ fn generate_find_query(lease: &Lease) -> String {
     ));
 
     if let Some(client_id) = lease.client_id.as_ref().filter(|c| !c.is_empty()) {
-        parts.push(format!("client-id=\"{}\"", client_id));
+        parts.push(format!("client-id={}", escape_mikrotik(client_id)));
     }
 
     format!("[find {}]", parts.join(" "))
