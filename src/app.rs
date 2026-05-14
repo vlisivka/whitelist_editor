@@ -162,18 +162,14 @@ impl WhitelistApp {
 fn generate_find_query(lease: &Lease) -> String {
     let mut parts = vec![format!("mac-address=\"{}\"", lease.mac_address)];
 
-    if let Some(addr) = &lease.address {
-        if !addr.is_empty() {
-            parts.push(format!("address=\"{}\"", addr));
-        }
+    if let Some(addr) = lease.address.as_ref().filter(|a| !a.is_empty()) {
+        parts.push(format!("address=\"{}\"", addr));
     }
 
     parts.push(format!("server=\"{}\"", lease.server));
 
-    if let Some(comment) = &lease.comment {
-        if !comment.is_empty() {
-            parts.push(format!("comment=\"{}\"", comment));
-        }
+    if let Some(comment) = lease.comment.as_ref().filter(|c| !c.is_empty()) {
+        parts.push(format!("comment=\"{}\"", comment));
     }
 
     parts.push(format!(
@@ -181,10 +177,8 @@ fn generate_find_query(lease: &Lease) -> String {
         if lease.block_access { "yes" } else { "no" }
     ));
 
-    if let Some(client_id) = &lease.client_id {
-        if !client_id.is_empty() {
-            parts.push(format!("client-id=\"{}\"", client_id));
-        }
+    if let Some(client_id) = lease.client_id.as_ref().filter(|c| !c.is_empty()) {
+        parts.push(format!("client-id=\"{}\"", client_id));
     }
 
     format!("[find {}]", parts.join(" "))
@@ -462,49 +456,38 @@ impl eframe::App for WhitelistApp {
                             };
 
                             // Validation logic
-                            if let Some(server_info) =
-                                self.data.servers.iter().find(|s| s.name == lease.server)
+                            if let Some(net) = self
+                                .data
+                                .servers
+                                .iter()
+                                .find(|s| s.name == lease.server)
+                                .and_then(|si| find_network_for_server(si, &self.data.networks))
+                                && !is_valid_ipv4(&address, net, &self.data.leases, &lease.mac_address)
                             {
-                                if let Some(net) =
-                                    find_network_for_server(server_info, &self.data.networks)
+                                is_valid = false;
+                                // Show specific error messages
+                                if address.parse::<std::net::Ipv4Addr>().is_err() {
+                                    ui.label(
+                                        egui::RichText::new("❌ Невірний формат IP")
+                                            .color(egui::Color32::LIGHT_RED)
+                                            .size(10.0),
+                                    );
+                                } else if !is_ip_in_range(&address, net) {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "❌ Поза діапазоном {}",
+                                            net.address
+                                        ))
+                                        .color(egui::Color32::LIGHT_RED)
+                                        .size(10.0),
+                                    );
+                                } else if !is_ip_unique(&address, &self.data.leases, &lease.mac_address)
                                 {
-                                    if !is_valid_ipv4(
-                                        &address,
-                                        net,
-                                        &self.data.leases,
-                                        &lease.mac_address,
-                                    ) {
-                                        is_valid = false;
-                                        // Show specific error messages
-                                        if address.parse::<std::net::Ipv4Addr>().is_err() {
-                                            ui.label(
-                                                egui::RichText::new("❌ Невірний формат IP")
-                                                    .color(egui::Color32::LIGHT_RED)
-                                                    .size(10.0),
-                                            );
-                                        } else if !is_ip_in_range(&address, net) {
-                                            ui.label(
-                                                egui::RichText::new(format!(
-                                                    "❌ Поза діапазоном {}",
-                                                    net.address
-                                                ))
-                                                .color(egui::Color32::LIGHT_RED)
-                                                .size(10.0),
-                                            );
-                                        } else if !is_ip_unique(
-                                            &address,
-                                            &self.data.leases,
-                                            &lease.mac_address,
-                                        ) {
-                                            ui.label(
-                                                egui::RichText::new(
-                                                    "⚠️ Ця адреса вже використовується",
-                                                )
-                                                .color(egui::Color32::LIGHT_RED)
-                                                .size(10.0),
-                                            );
-                                        }
-                                    }
+                                    ui.label(
+                                        egui::RichText::new("⚠️ Ця адреса вже використовується")
+                                            .color(egui::Color32::LIGHT_RED)
+                                            .size(10.0),
+                                    );
                                 }
                             }
                         });
@@ -538,20 +521,16 @@ impl eframe::App for WhitelistApp {
                             });
 
                         // If server changed, suggest first free IP
-                        if lease.server != old_server {
-                            if let Some(server_info) =
-                                self.data.servers.iter().find(|s| s.name == lease.server)
-                            {
-                                if let Some(net) =
-                                    find_network_for_server(server_info, &self.data.networks)
-                                {
-                                    if let Some(free_ip) =
-                                        find_first_free_ip(net, &self.data.leases)
-                                    {
-                                        lease.address = Some(free_ip);
-                                    }
-                                }
-                            }
+                        if lease.server != old_server
+                            && let Some(free_ip) = self
+                                .data
+                                .servers
+                                .iter()
+                                .find(|s| s.name == lease.server)
+                                .and_then(|si| find_network_for_server(si, &self.data.networks))
+                                .and_then(|net| find_first_free_ip(net, &self.data.leases))
+                        {
+                            lease.address = Some(free_ip);
                         }
                         ui.end_row();
 

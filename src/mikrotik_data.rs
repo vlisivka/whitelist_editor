@@ -138,13 +138,12 @@ pub fn find_network_for_server<'a>(
     networks: &'a [DhcpNetwork],
 ) -> Option<&'a DhcpNetwork> {
     // Priority 1: Match by comment
-    if let Some(s_comment) = &server.comment {
-        if let Some(net) = networks
-            .iter()
-            .find(|n| n.comment.as_ref() == Some(s_comment))
-        {
-            return Some(net);
-        }
+    if let Some(net) = server
+        .comment
+        .as_ref()
+        .and_then(|s_comment| networks.iter().find(|n| n.comment.as_ref() == Some(s_comment)))
+    {
+        return Some(net);
     }
 
     // Priority 2: Fallback (can't really match by interface easily without more data)
