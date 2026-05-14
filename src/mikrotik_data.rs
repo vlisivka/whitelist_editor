@@ -351,6 +351,25 @@ pub fn is_valid_ipv4(
     true
 }
 
+/// Повертає підмножину лізів, у яких хоча б одне поле
+/// містить рядок `query` (нечутливо до регістру).
+/// Порожній `query` → повертає всі ліза.
+pub fn filter_leases<'a>(leases: &'a [Lease], query: &str) -> Vec<&'a Lease> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return leases.iter().collect();
+    }
+    leases
+        .iter()
+        .filter(|l| {
+            l.address.as_deref().unwrap_or("").to_lowercase().contains(&q)
+                || l.mac_address.to_lowercase().contains(&q)
+                || l.server.to_lowercase().contains(&q)
+                || l.comment.as_deref().unwrap_or("").to_lowercase().contains(&q)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,5 +530,90 @@ add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.16
             r#""Path with \"quotes\"""#
         );
         assert_eq!(super::escape_mikrotik("simple"), r#""simple""#);
+    }
+
+    // --- filter_leases ---
+
+    fn make_leases() -> Vec<Lease> {
+        vec![
+            Lease {
+                address: Some("172.16.20.217".to_string()),
+                mac_address: "A4:C6:9A:08:86:C8".to_string(),
+                server: "corp-dhcp".to_string(),
+                comment: None,
+                block_access: true,
+                client_id: None,
+            },
+            Lease {
+                address: Some("172.22.2.29".to_string()),
+                mac_address: "F4:1E:57:7F:D1:57".to_string(),
+                server: "mng-server".to_string(),
+                comment: Some("029SYN".to_string()),
+                block_access: false,
+                client_id: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn test_filter_leases_empty_query() {
+        let leases = make_leases();
+        let result = filter_leases(&leases, "");
+        assert_eq!(result.len(), 2, "Порожній запит має повертати всі записи");
+    }
+
+    #[test]
+    fn test_filter_leases_empty_query_whitespace() {
+        let leases = make_leases();
+        let result = filter_leases(&leases, "   ");
+        assert_eq!(result.len(), 2, "Запит з пробілів має повертати всі записи");
+    }
+
+    #[test]
+    fn test_filter_leases_by_ip() {
+        let leases = make_leases();
+        let result = filter_leases(&leases, "172.22");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].address.as_deref(), Some("172.22.2.29"));
+    }
+
+    #[test]
+    fn test_filter_leases_by_mac() {
+        let leases = make_leases();
+        let result = filter_leases(&leases, "f4:1e:57");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].mac_address, "F4:1E:57:7F:D1:57");
+    }
+
+    #[test]
+    fn test_filter_leases_by_server() {
+        let leases = make_leases();
+        let result = filter_leases(&leases, "corp-dhcp");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].server, "corp-dhcp");
+    }
+
+    #[test]
+    fn test_filter_leases_by_comment() {
+        let leases = make_leases();
+        let result = filter_leases(&leases, "029syn");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].comment.as_deref(), Some("029SYN"));
+    }
+
+    #[test]
+    fn test_filter_leases_no_match() {
+        let leases = make_leases();
+        let result = filter_leases(&leases, "xxxxxxx");
+        assert!(result.is_empty(), "Немає збігів — має повертати порожній вектор");
+    }
+
+    #[test]
+    fn test_filter_leases_case_insensitive() {
+        let leases = make_leases();
+        // «SYN» має знайти коментар «029SYN»
+        let result = filter_leases(&leases, "SYN");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].comment.as_deref(), Some("029SYN"));
     }
 }

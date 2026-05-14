@@ -1,6 +1,6 @@
 use crate::mikrotik_data::{
-    DhcpData, Lease, escape_mikrotik, find_first_free_ip, find_network_for_server, is_ip_in_range,
-    is_ip_unique, is_valid_ipv4, is_valid_mac, parse_all,
+    DhcpData, Lease, escape_mikrotik, filter_leases, find_first_free_ip, find_network_for_server,
+    is_ip_in_range, is_ip_unique, is_valid_ipv4, is_valid_mac, parse_all,
 };
 use crate::ssh_client::{SSHClient, SSHConnector};
 use eframe::egui;
@@ -41,6 +41,8 @@ pub struct WhitelistApp {
     is_adding: bool,
     #[serde(skip)]
     selected_tab: Tab,
+    #[serde(skip)]
+    search_query: String,
 }
 
 impl Default for WhitelistApp {
@@ -57,6 +59,7 @@ impl Default for WhitelistApp {
             deleting_lease: None,
             is_adding: false,
             selected_tab: Tab::Editor,
+            search_query: String::new(),
         }
     }
 }
@@ -257,9 +260,28 @@ impl eframe::App for WhitelistApp {
 
                     ui.add_space(10.0);
 
+                    // Search Bar
+                    if !self.data.leases.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.label("🔍 Пошук:");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.search_query)
+                                    .hint_text("IP, MAC, сервер, коментар...")
+                                    .desired_width(300.0),
+                            );
+                            if ui.button("❌").on_hover_text("Скинути пошук").clicked() {
+                                self.search_query.clear();
+                            }
+                        });
+                        ui.add_space(5.0);
+                    }
+
                     // Table View
                     if !self.data.leases.is_empty() {
                         egui::ScrollArea::horizontal().show(ui, |ui| {
+                            let filtered: Vec<&Lease> =
+                                filter_leases(&self.data.leases, &self.search_query);
+
                             let table = TableBuilder::new(ui)
                                 .id_salt("leases_table")
                                 .striped(true)
@@ -306,9 +328,9 @@ impl eframe::App for WhitelistApp {
                                     });
                                 })
                                 .body(|body| {
-                                    body.rows(28.0, self.data.leases.len(), |mut row| {
+                                    body.rows(28.0, filtered.len(), |mut row| {
                                         let row_index = row.index();
-                                        let lease = self.data.leases[row_index].clone();
+                                        let lease = filtered[row_index].clone();
 
                                         row.col(|ui| {
                                             ui.label(row_index.to_string());
@@ -679,6 +701,15 @@ add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.16
     }
 
     #[test]
+    fn test_search_query_initial_state() {
+        let app = WhitelistApp::default();
+        assert_eq!(
+            app.search_query, "",
+            "Поле пошуку має бути порожнім за замовчуванням"
+        );
+    }
+
+    #[test]
     fn test_refresh_data_with_mock() {
         let mut app = WhitelistApp::default();
         let mut responses = HashMap::new();
@@ -696,6 +727,23 @@ add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.16
         assert_eq!(app.data.servers.len(), 3);
         assert_eq!(app.data.networks.len(), 3);
         assert!(app.status.contains("Завантажено 2 адрес"));
+    }
+
+    #[test]
+    fn test_filter_applied_to_leases() {
+        let mut app = WhitelistApp::default();
+        let mut responses = HashMap::new();
+        responses.insert(
+            "/ip/dhcp-server/export".to_string(),
+            MIKROTIK_EXPORT.to_string(),
+        );
+        app.client = Some(Box::new(MockSSHClient { responses }));
+        app.refresh_data();
+
+        app.search_query = "corp-dhcp".to_string();
+        let filtered = filter_leases(&app.data.leases, &app.search_query);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].server, "corp-dhcp");
     }
 
     #[test]
