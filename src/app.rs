@@ -48,6 +48,10 @@ pub struct WhitelistApp {
     sort_column: Option<SortColumn>,
     #[serde(skip)]
     sort_order: SortOrder,
+    #[serde(skip)]
+    save_error: Option<String>,
+    #[serde(skip)]
+    delete_error: Option<String>,
 }
 
 impl Default for WhitelistApp {
@@ -67,6 +71,8 @@ impl Default for WhitelistApp {
             search_query: String::new(),
             sort_column: None,
             sort_order: SortOrder::default(),
+            save_error: None,
+            delete_error: None,
         }
     }
 }
@@ -93,77 +99,109 @@ impl WhitelistApp {
         }
     }
 
-    fn refresh_data(&mut self) {
+    fn execute_with_retry(&mut self, cmd: &str) -> Result<String, String> {
         if let Some(client) = &mut self.client {
-            match client.execute("/ip/dhcp-server/export") {
-                Ok(output) => {
-                    self.data = parse_all(&output);
-                    self.status = format!(
-                        "Завантажено {} адрес, {} серверів",
-                        self.data.leases.len(),
-                        self.data.servers.len()
-                    );
+            match client.execute(cmd) {
+                Ok(res) => return Ok(res),
+                Err(_) => {
+                    // fallthrough to reconnect
                 }
-                Err(e) => {
-                    self.status = format!("Помилка при отриманні даних: {}", e);
+            }
+        } else {
+            return Err("Відсутнє з'єднання".to_owned());
+        }
+
+        self.status = "Помилка з'єднання. Перепідключення...".to_owned();
+
+        // Allow tests to mock reconnect failure by checking if host is valid,
+        // but we can just let `SSHClient::connect` fail gracefully if it's a test.
+        match SSHClient::connect(&self.host, &self.user, &self.pass) {
+            Ok(new_client) => {
+                self.status = "З'єднано".to_owned();
+                self.client = Some(Box::new(new_client));
+                match self.client.as_mut().unwrap().execute(cmd) {
+                    Ok(res) => Ok(res),
+                    Err(e) => Err(format!("Помилка після перез'єднання: {}", e)),
                 }
+            }
+            Err(e) => {
+                self.status = format!("Помилка з'єднання: {}", e);
+                Err(format!("Не вдалося перез'єднатися: {}", e))
             }
         }
     }
 
-    fn save_lease(&mut self, lease: Lease, is_new: bool) {
-        if let Some(client) = &mut self.client {
-            let cmd = if is_new {
-                format!(
-                    "/ip/dhcp-server/lease/add address={} mac-address={} server={} comment={} block-access={}",
-                    escape_mikrotik(lease.address.as_deref().unwrap_or("0.0.0.0")),
-                    escape_mikrotik(&lease.mac_address),
-                    escape_mikrotik(&lease.server),
-                    escape_mikrotik(lease.comment.as_deref().unwrap_or("")),
-                    if lease.block_access { "yes" } else { "no" }
-                )
-            } else {
-                let find_query = if let Some(original) = &self.original_lease {
-                    generate_find_query(original)
-                } else {
-                    format!("[find mac-address={}]", escape_mikrotik(&lease.mac_address))
-                };
+    fn refresh_data(&mut self) {
+        match self.execute_with_retry("/ip/dhcp-server/export") {
+            Ok(output) => {
+                self.data = parse_all(&output);
+                self.status = format!(
+                    "Завантажено {} адрес, {} серверів",
+                    self.data.leases.len(),
+                    self.data.servers.len()
+                );
+            }
+            Err(e) => {
+                self.status = format!("Помилка при отриманні даних: {}", e);
+            }
+        }
+    }
 
-                format!(
-                    "/ip/dhcp-server/lease/set {} address={} server={} comment={} block-access={}",
-                    find_query,
-                    escape_mikrotik(lease.address.as_deref().unwrap_or("0.0.0.0")),
-                    escape_mikrotik(&lease.server),
-                    escape_mikrotik(lease.comment.as_deref().unwrap_or("")),
-                    if lease.block_access { "yes" } else { "no" }
-                )
+    fn save_lease(&mut self, lease: Lease, is_new: bool) -> Result<(), String> {
+        let cmd = if is_new {
+            format!(
+                "/ip/dhcp-server/lease/add address={} mac-address={} server={} comment={} block-access={}",
+                escape_mikrotik(lease.address.as_deref().unwrap_or("0.0.0.0")),
+                escape_mikrotik(&lease.mac_address),
+                escape_mikrotik(&lease.server),
+                escape_mikrotik(lease.comment.as_deref().unwrap_or("")),
+                if lease.block_access { "yes" } else { "no" }
+            )
+        } else {
+            let find_query = if let Some(original) = &self.original_lease {
+                generate_find_query(original)
+            } else {
+                format!("[find mac-address={}]", escape_mikrotik(&lease.mac_address))
             };
 
-            match client.execute(&cmd) {
-                Ok(_) => {
-                    self.status = "Адреса успішно збережена".to_owned();
-                    self.refresh_data();
-                }
-                Err(e) => {
-                    self.status = format!("Помилка збереження адреси: {}", e);
-                }
+            format!(
+                "/ip/dhcp-server/lease/set {} address={} server={} comment={} block-access={}",
+                find_query,
+                escape_mikrotik(lease.address.as_deref().unwrap_or("0.0.0.0")),
+                escape_mikrotik(&lease.server),
+                escape_mikrotik(lease.comment.as_deref().unwrap_or("")),
+                if lease.block_access { "yes" } else { "no" }
+            )
+        };
+
+        match self.execute_with_retry(&cmd) {
+            Ok(_) => {
+                self.status = "Адреса успішно збережена".to_owned();
+                self.refresh_data();
+                self.save_error = None;
+                Ok(())
+            }
+            Err(e) => {
+                self.save_error = Some(e.clone());
+                Err(e)
             }
         }
     }
 
-    fn delete_lease(&mut self, lease: Lease) {
-        if let Some(client) = &mut self.client {
-            let find_query = generate_find_query(&lease);
-            let cmd = format!("/ip/dhcp-server/lease/remove {}", find_query);
+    fn delete_lease(&mut self, lease: Lease) -> Result<(), String> {
+        let find_query = generate_find_query(&lease);
+        let cmd = format!("/ip/dhcp-server/lease/remove {}", find_query);
 
-            match client.execute(&cmd) {
-                Ok(_) => {
-                    self.status = "Адресу видалено".to_owned();
-                    self.refresh_data();
-                }
-                Err(e) => {
-                    self.status = format!("Помилка видалення: {}", e);
-                }
+        match self.execute_with_retry(&cmd) {
+            Ok(_) => {
+                self.status = "Адресу видалено".to_owned();
+                self.refresh_data();
+                self.delete_error = None;
+                Ok(())
+            }
+            Err(e) => {
+                self.delete_error = Some(e.clone());
+                Err(e)
             }
         }
     }
@@ -268,7 +306,13 @@ impl eframe::App for WhitelistApp {
 
                     // Status Bar
                     ui.horizontal(|ui| {
-                        ui.label(format!("Статус: {}", self.status));
+                        let is_error = self.status.contains("Помилка") || self.status.contains("Не вдалося");
+                        let status_text = format!("Статус: {}", self.status);
+                        if is_error {
+                            ui.label(egui::RichText::new(status_text).color(egui::Color32::RED));
+                        } else {
+                            ui.label(status_text);
+                        }
                         if self.client.is_some() {
                             if ui.button("Оновити").clicked() {
                                 self.refresh_data();
@@ -644,13 +688,19 @@ impl eframe::App for WhitelistApp {
                     });
 
                 ui.add_space(10.0);
+                if let Some(err) = &self.save_error {
+                    ui.label(egui::RichText::new(format!("❌ {}", err)).color(egui::Color32::RED));
+                    ui.add_space(5.0);
+                }
+
                 ui.horizontal(|ui| {
                     let save_btn = egui::Button::new("Зберегти");
-                    if ui.add_enabled(is_valid, save_btn).clicked() {
-                        self.save_lease(lease.clone(), self.is_adding);
+                    if ui.add_enabled(is_valid, save_btn).clicked()
+                        && self.save_lease(lease.clone(), self.is_adding).is_ok() {
                         should_close = true;
                     }
                     if ui.button("Скасувати").clicked() {
+                        self.save_error = None;
                         should_close = true;
                     }
                 });
@@ -709,21 +759,29 @@ impl eframe::App for WhitelistApp {
                         });
 
                         ui.add_space(15.0);
+
+                        if let Some(err) = &self.delete_error {
+                            ui.label(egui::RichText::new(format!("❌ {}", err)).color(egui::Color32::RED));
+                            ui.add_space(5.0);
+                        }
+
                         ui.horizontal(|ui| {
                             if ui.button("Видалити").clicked() {
                                 should_delete = true;
-                                should_close = true;
                             }
                             if ui.button("Скасувати").clicked() {
+                                self.delete_error = None;
                                 should_close = true;
                             }
                         });
                     });
                 });
 
-            if should_delete {
-                self.delete_lease(lease);
-            } else if open && !should_close {
+            if should_delete && self.delete_lease(lease.clone()).is_ok() {
+                should_close = true;
+            }
+
+            if open && !should_close {
                 self.deleting_lease = Some(lease);
             }
         }
@@ -863,5 +921,54 @@ add address=192.168.10.0/24 comment=guest dns-server=192.168.10.1 gateway=192.16
         app.toggle_sort(SortColumn::Mac); // Новий стовпець -> Asc
         assert_eq!(app.sort_column, Some(SortColumn::Mac));
         assert_eq!(app.sort_order, SortOrder::Asc);
+    }
+
+    #[test]
+    fn test_save_lease_error_keeps_window_open() {
+        let mut app = WhitelistApp::default();
+        app.host = "127.0.0.1:12345".to_string(); // Use local non-listening port to fail fast
+
+        let mut responses = HashMap::new();
+        // Return error for the save command
+        responses.insert("error_trigger".to_string(), "error".to_string());
+
+        let mut mock_client = MockSSHClient { responses };
+        mock_client.responses.clear(); // Ensure it returns error for anything
+        app.client = Some(Box::new(mock_client));
+
+        let lease = Lease {
+            mac_address: "AA:BB:CC:DD:EE:FF".to_string(),
+            server: "test-server".to_string(),
+            ..Default::default()
+        };
+
+        let result = app.save_lease(lease, true);
+        assert!(result.is_err());
+        assert!(app.save_error.is_some());
+    }
+
+    #[test]
+    fn test_delete_lease_error_keeps_window_open() {
+        let mut app = WhitelistApp::default();
+        app.host = "127.0.0.1:12345".to_string(); // fail fast
+
+        let mut responses = HashMap::new();
+        responses.insert("error_trigger".to_string(), "error".to_string());
+
+        let mut mock_client = MockSSHClient { responses };
+        mock_client.responses.clear();
+        app.client = Some(Box::new(mock_client));
+
+        let lease = Lease {
+            mac_address: "AA:BB:CC:DD:EE:FF".to_string(),
+            server: "test-server".to_string(),
+            ..Default::default()
+        };
+
+        app.deleting_lease = Some(lease.clone());
+        let result = app.delete_lease(lease);
+
+        assert!(result.is_err());
+        assert!(app.delete_error.is_some());
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "whitelist_editor"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Volodymyr M. Lisivka <vlisivka@gmail.com>"]
 description = "Simple CRUD editor for Mikrotik static DHCP leases."
